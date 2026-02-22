@@ -7,12 +7,12 @@ import (
 
 // Load reads configuration from the environment.
 // Required: APCA_API_KEY_ID, APCA_API_SECRET_KEY.
-// Optional: ALPACA_DATA_BASE_URL (default sandbox; set for production),
+// Optional: ALPACA_DATA_BASE_URL (default data.alpaca.markets; paper keys work here),
 //           TICKERS (comma-separated, e.g. "AAPL,TSLA,GOOGL").
 func Load() (*Config, error) {
 	baseURL := os.Getenv("ALPACA_DATA_BASE_URL")
 	if baseURL == "" {
-		baseURL = "https://data.sandbox.alpaca.markets"
+		baseURL = "https://data.alpaca.markets"
 	}
 	tickersStr := os.Getenv("TICKERS")
 	if tickersStr == "" {

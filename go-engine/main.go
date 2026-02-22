@@ -22,8 +22,15 @@ func main() {
 		log.Fatal("set TICKERS (comma-separated, e.g. AAPL,TSLA,GOOGL)")
 	}
 
-	fmt.Println("Alpaca Market Data (sandbox by default)")
+	fmt.Println("Alpaca Market Data")
+	fmt.Println("Data URL:", cfg.DataBaseURL)
 	fmt.Println("Tickers:", strings.Join(cfg.Tickers, ", "))
+	// Confirm credentials are loaded (masked)
+	keyPreview := "not set"
+	if len(cfg.APIKeyID) >= 8 {
+		keyPreview = cfg.APIKeyID[:4] + "..." + cfg.APIKeyID[len(cfg.APIKeyID)-4:]
+	}
+	fmt.Println("Key ID:", keyPreview)
 	fmt.Println()
 
 	client := alpaca.NewClient(cfg.DataBaseURL, cfg.APIKeyID, cfg.APISecretKey)
