@@ -18,6 +18,7 @@ import os
 import time
 from collections import defaultdict
 from datetime import datetime
+from typing import Optional
 
 from brain.strategy import (
     sentiment_score_from_news,
@@ -91,7 +92,7 @@ ORDER_COOLDOWN_SEC = 60
 last_order_time_by_symbol: dict[str, float] = {}
 
 
-def _parse_unrealized_plpc(raw) -> float | None:
+def _parse_unrealized_plpc(raw) -> Optional[float]:
     """Parse Alpaca unrealized_plpc (string or number) to decimal. None if missing/invalid."""
     if raw is None:
         return None

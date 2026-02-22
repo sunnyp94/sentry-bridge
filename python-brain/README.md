@@ -11,6 +11,7 @@ python-brain/
 ├── apps/               # Entry points (runnable scripts)
 │   ├── consumer.py     # Stdin consumer — used by Go (BRAIN_CMD). Reads NDJSON, runs strategy, places orders.
 │   ├── redis_consumer.py  # Redis consumer — reads stream market:updates (test pipeline or second consumer).
+│   ├── replay_e2e.py  # E2E test: emits synthetic NDJSON (volatility, trade, news) so you can test without market hours.
 │   └── test_paper_order.py # One-off test: submit 1 paper BUY to verify Alpaca API.
 └── brain/              # Library package (do not run directly)
     ├── config.py       # All thresholds and flags from env.
@@ -33,5 +34,12 @@ python-brain/
   (or from inside `python-brain`: `python3 apps/redis_consumer.py`).
 - **Test paper order:** From repo root with `.env` loaded:  
   `cd python-brain && python3 apps/test_paper_order.py`
+
+- **E2E replay (no market data):** When the market is closed (e.g. Sunday), run a short replay that feeds the same NDJSON format Go uses:
+  ```bash
+  cd python-brain
+  python3 apps/replay_e2e.py | python3 apps/consumer.py
+  ```
+  You should see event logs, composite/strategy output, and optionally a paper order if `TRADE_PAPER=true` and Alpaca keys are set. To only test the pipeline without placing orders, set `TRADE_PAPER=false` or omit Alpaca keys.
 
 Install deps first: `python3 -m pip install -r requirements.txt` (from repo root or python-brain).

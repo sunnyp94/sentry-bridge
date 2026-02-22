@@ -128,7 +128,15 @@ Make sure `.env` contains your real Alpaca keys. Use `TICKERS=AAPL,TSLA,NVDA,MET
    ```
    You should see one `[brain] TRADE AAPL ...` line.
 
-5. **Stop:** press **Ctrl+C** in the terminal where `cd go-engine && go run .` is running.
+5. **Test end-to-end with synthetic data (no market hours):** When the market is closed (e.g. Sunday evening), use the replay script to run the full brain pipeline (composite → strategy → optional paper order):
+   ```bash
+   cd /Users/sunnypatel/Projects/sentry-bridge
+   set -a && source .env && set +a
+   python3 python-brain/apps/replay_e2e.py | python3 python-brain/apps/consumer.py
+   ```
+   To test strategy only without placing orders: `TRADE_PAPER=false python3 python-brain/apps/replay_e2e.py | python3 python-brain/apps/consumer.py`.
+
+6. **Stop:** press **Ctrl+C** in the terminal where `cd go-engine && go run .` is running.
 
 **Note:** During US market hours (9:30am–4pm ET, weekdays) you’ll get live trades/quotes. Outside those hours you’ll mainly see news (if any), volatility on startup, and positions/orders every 30s.
 
