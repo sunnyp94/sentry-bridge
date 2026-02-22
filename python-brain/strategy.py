@@ -3,10 +3,18 @@ Strategy: decide buy/sell/hold from sentiment (news) and probability of gain (pr
 Uses FinBERT (finance-trained transformer) when available for headline + summary;
 falls back to VADER. Uses per-symbol sentiment EMA so one noisy headline doesn't flip decisions.
 """
+import logging
 import os
-import sys
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Dict, Literal, Optional
+
+log = logging.getLogger("strategy")
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None  # Python < 3.9
 
 # FinBERT (transformers + torch) for finance-specific sentiment
 _finbert_pipeline = None
@@ -31,6 +39,8 @@ _kill_switch_active = os.environ.get("KILL_SWITCH", "").lower() in ("true", "1",
 KILL_SWITCH_SENTIMENT_THRESHOLD = float(os.environ.get("KILL_SWITCH_SENTIMENT_THRESHOLD", "-0.50"))
 KILL_SWITCH_RETURN_THRESHOLD = float(os.environ.get("KILL_SWITCH_RETURN_THRESHOLD", "-0.05"))  # e.g. -5% return
 STOP_LOSS_PCT = float(os.environ.get("STOP_LOSS_PCT", "5.0"))  # e.g. 5 = 5% stop loss
+# No new buys in first N minutes after market open (9:30 ET); sells (e.g. stop loss) still allowed.
+NO_TRADE_FIRST_MINUTES_AFTER_OPEN = int(os.environ.get("NO_TRADE_FIRST_MINUTES_AFTER_OPEN", "15"))
 
 
 def _sentiment_finbert(text: str) -> Optional[float]:
@@ -123,7 +133,7 @@ def set_kill_switch_from_news(raw_sentiment: float) -> None:
     global _kill_switch_active
     if not _kill_switch_active and raw_sentiment <= KILL_SWITCH_SENTIMENT_THRESHOLD:
         _kill_switch_active = True
-        print(f"[strategy] kill_switch ON (bad news sentiment={raw_sentiment:.2f})", file=sys.stderr)
+        log.warning("kill_switch ON (bad news sentiment=%.2f)", raw_sentiment)
 
 
 def set_kill_switch_from_returns(return_1m: Optional[float], return_5m: Optional[float]) -> None:
@@ -135,16 +145,40 @@ def set_kill_switch_from_returns(return_1m: Optional[float], return_5m: Optional
     thresh = KILL_SWITCH_RETURN_THRESHOLD
     if return_1m is not None and return_1m <= thresh and not _kill_switch_active:
         _kill_switch_active = True
-        print(f"[strategy] kill_switch ON (market stress return_1m={return_1m*100:.2f}%)", file=sys.stderr)
+        log.warning("kill_switch ON (market stress return_1m=%.2f%%)", return_1m * 100)
     if return_5m is not None and return_5m <= thresh and not _kill_switch_active:
         _kill_switch_active = True
-        print(f"[strategy] kill_switch ON (market stress return_5m={return_5m*100:.2f}%)", file=sys.stderr)
+        log.warning("kill_switch ON (market stress return_5m=%.2f%%)", return_5m * 100)
 
 
 def set_kill_switch(active: bool) -> None:
     """Manually set kill switch (e.g. from env at startup or external signal)."""
     global _kill_switch_active
     _kill_switch_active = active
+
+
+def is_in_opening_no_trade_window() -> bool:
+    """
+    True if we're in the first NO_TRADE_FIRST_MINUTES_AFTER_OPEN minutes after market open (9:30 AM ET).
+    Used to avoid new buys during the volatile opening; sells (e.g. stop loss) still allowed.
+    """
+    if NO_TRADE_FIRST_MINUTES_AFTER_OPEN <= 0:
+        return False
+    if ZoneInfo is None:
+        return False
+    try:
+        et = datetime.now(ZoneInfo("America/New_York"))
+        # Weekday 0=Mon .. 4=Fri
+        if et.weekday() > 4:
+            return False
+        # 9:30 AM = minute 0 of regular session; 9:44 = minute 14
+        if et.hour != 9:
+            return False
+        if et.minute < 30:
+            return False
+        return et.minute < 30 + NO_TRADE_FIRST_MINUTES_AFTER_OPEN  # 9:30..9:44 for 15 min
+    except Exception:
+        return False
 
 
 def probability_gain(payload: dict) -> float:
@@ -218,6 +252,10 @@ def decide(
     # Buy: kill switch blocks all buys (market tanks, bad news, or manual)
     if is_kill_switch_active():
         return Decision("hold", symbol, 0, "kill_switch_active")
+
+    # Buy: no new buys in first N minutes after market open (9:30–9:44 ET); avoid opening volatility
+    if not have_position and is_in_opening_no_trade_window():
+        return Decision("hold", symbol, 0, "opening_15min_no_trade")
 
     # Buy: clear bullish conviction (sentiment above threshold and above min confidence) + prob_gain
     if not have_position and sentiment >= buy_thresh and sentiment >= buy_min_confidence and prob_gain >= prob_thresh:

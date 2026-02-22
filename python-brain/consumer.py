@@ -13,6 +13,7 @@ Run by the Go engine when BRAIN_CMD is set. Set APCA_API_KEY_ID, APCA_API_SECRET
 and TRADE_PAPER=true to enable paper trading (strategy decides; executor places orders).
 """
 import json
+import logging
 import os
 import sys
 import time
@@ -30,6 +31,9 @@ from strategy import (
     Decision,
 )
 
+log = logging.getLogger("brain")
+
+
 def format_ts(ts: str) -> str:
     try:
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).strftime("%H:%M:%S")
@@ -37,35 +41,39 @@ def format_ts(ts: str) -> str:
         return ts
 
 
-def print_event(ev: dict) -> None:
+def log_event(ev: dict) -> None:
     typ = ev.get("type", "?")
     ts = format_ts(ev.get("ts", ""))
     payload = ev.get("payload") or {}
 
     if typ == "trade":
-        print(f"[brain] TRADE  {payload.get('symbol')} ${payload.get('price', 0):.2f} "
-              f"size={payload.get('size')} vol_1m={payload.get('volume_1m')} "
-              f"ret_1m={payload.get('return_1m', 0):.4f} session={payload.get('session')} [{ts}]")
+        log.info(
+            "trade symbol=%s price=%.2f size=%s vol_1m=%s ret_1m=%.4f session=%s ts=%s",
+            payload.get("symbol"), payload.get("price", 0), payload.get("size"),
+            payload.get("volume_1m"), payload.get("return_1m", 0), payload.get("session"), ts,
+        )
     elif typ == "quote":
-        print(f"[brain] QUOTE  {payload.get('symbol')} bid={payload.get('bid'):.2f} ask={payload.get('ask'):.2f} "
-              f"mid={payload.get('mid'):.2f} bid_sz={payload.get('bid_size')} ask_sz={payload.get('ask_size')} [{ts}]")
+        log.info(
+            "quote symbol=%s bid=%.2f ask=%.2f mid=%.2f ts=%s",
+            payload.get("symbol"), payload.get("bid"), payload.get("ask"), payload.get("mid"), ts,
+        )
     elif typ == "news":
         symbols = ",".join(payload.get("symbols") or [])
-        print(f"[brain] NEWS   {symbols} | {payload.get('headline', '')[:60]}... [{ts}]")
+        log.info("news symbols=%s headline=%s ts=%s", symbols, (payload.get("headline") or "")[:60], ts)
     elif typ == "volatility":
-        print(f"[brain] VOL    {payload.get('symbol')} annualized_30d={payload.get('annualized_vol_30d', 0)*100:.2f}% [{ts}]")
+        log.info("volatility symbol=%s annualized_30d=%.2f%% ts=%s", payload.get("symbol"), (payload.get("annualized_vol_30d") or 0) * 100, ts)
     elif typ == "positions":
         positions = payload.get("positions") or []
-        print(f"[brain] POSITIONS count={len(positions)} [{ts}]")
+        log.info("positions count=%d ts=%s", len(positions), ts)
         for p in positions[:5]:
-            print(f"         {p.get('symbol')} {p.get('side')} qty={p.get('qty')} mv={p.get('market_value')}")
+            log.debug("  position %s %s qty=%s mv=%s", p.get("symbol"), p.get("side"), p.get("qty"), p.get("market_value"))
     elif typ == "orders":
         orders = payload.get("orders") or []
-        print(f"[brain] ORDERS count={len(orders)} [{ts}]")
+        log.info("orders count=%d ts=%s", len(orders), ts)
         for o in orders[:5]:
-            print(f"         {o.get('symbol')} {o.get('side')} qty={o.get('qty')} status={o.get('status')}")
+            log.debug("  order %s %s qty=%s status=%s", o.get("symbol"), o.get("side"), o.get("qty"), o.get("status"))
     else:
-        print(f"[brain] {typ} {json.dumps(payload)[:80]} [{ts}]")
+        log.info("event type=%s payload=%s ts=%s", typ, json.dumps(payload)[:80], ts)
 
 
 # --- Strategy state (updated from events) ---
@@ -101,7 +109,7 @@ def _try_place_order(d: Decision) -> bool:
         return False
     now = time.time()
     if now - last_order_time_by_symbol.get(d.symbol, 0) < ORDER_COOLDOWN_SEC:
-        print(f"[strategy] skip order (cooldown) {d.symbol}", file=sys.stderr)
+        log.warning("skip order (cooldown) symbol=%s", d.symbol)
         return False
     if os.environ.get("TRADE_PAPER", "true").lower() not in ("true", "1", "yes"):
         return False
@@ -135,7 +143,7 @@ def run_stop_loss_check() -> None:
         sess = session_by_symbol.get(sym, "regular")
         d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct)
         if d.action == "sell" and d.qty > 0:
-            print(f"[strategy] {d.symbol} stop_loss pl_pct={pl_pct*100:.2f}% -> sell qty={d.qty} ({d.reason})", file=sys.stderr)
+            log.warning("stop_loss symbol=%s pl_pct=%.2f%% sell qty=%d reason=%s", d.symbol, pl_pct * 100, d.qty, d.reason)
             _try_place_order(d)
 
 
@@ -164,7 +172,7 @@ def run_strategy_on_news(payload: dict) -> None:
         sess = session_by_symbol.get(sym, "regular")
         pl_pct = position_unrealized_pl_pct.get(sym)
         d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct)
-        print(f"[strategy] {d.symbol} sentiment_raw={sent_raw:.2f} sentiment_ema={sent_ema:.2f} prob_gain={prob:.2f} -> {d.action} qty={d.qty} ({d.reason})")
+        log.info("strategy symbol=%s sentiment_raw=%.2f sentiment_ema=%.2f prob_gain=%.2f -> action=%s qty=%d reason=%s", d.symbol, sent_raw, sent_ema, prob, d.action, d.qty, d.reason)
         _try_place_order(d)
 
 
@@ -213,12 +221,15 @@ def handle_event(ev: dict) -> None:
 
 
 def main() -> None:
-    print("[brain] reading from stdin (NDJSON)...", file=sys.stderr)
+    from log_config import init as init_logging
+    init_logging()
+
+    log.info("reading from stdin (NDJSON)")
     if os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY_ID"):
         trade = os.environ.get("TRADE_PAPER", "true").lower() in ("true", "1", "yes")
-        print(f"[brain] Alpaca keys set; TRADE_PAPER={trade} (strategy will {'place paper orders' if trade else 'log decisions only'})", file=sys.stderr)
+        log.info("Alpaca keys set; TRADE_PAPER=%s (strategy will %s)", trade, "place paper orders" if trade else "log decisions only")
     else:
-        print("[brain] No Alpaca keys; strategy will log decisions only (no orders).", file=sys.stderr)
+        log.info("No Alpaca keys; strategy will log decisions only (no orders)")
 
     for line in sys.stdin:
         line = line.strip()
@@ -226,12 +237,12 @@ def main() -> None:
             continue
         try:
             ev = json.loads(line)
-            print_event(ev)
+            log_event(ev)
             handle_event(ev)
         except json.JSONDecodeError as e:
-            print(f"[brain] invalid JSON: {e}", file=sys.stderr)
+            log.error("invalid JSON: %s", e)
         except Exception as e:
-            print(f"[brain] error: {e}", file=sys.stderr)
+            log.exception("error processing event")
 
 
 if __name__ == "__main__":

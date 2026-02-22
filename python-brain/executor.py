@@ -2,11 +2,13 @@
 Execute strategy decisions on Alpaca (paper trading by default).
 Uses alpaca-py; credentials from APCA_API_KEY_ID, APCA_API_SECRET_KEY.
 """
+import logging
 import os
-import sys
 from typing import Optional
 
 from strategy import Decision
+
+log = logging.getLogger("executor")
 
 try:
     from alpaca.trading.client import TradingClient
@@ -32,11 +34,11 @@ def place_order(decision: Decision) -> bool:
     if decision.action == "hold" or decision.qty <= 0:
         return False
     if TradingClient is None or MarketOrderRequest is None:
-        print("[executor] alpaca-py not installed. Run: python3 -m pip install alpaca-py  (or: pip install -r requirements.txt)", file=sys.stderr)
+        log.error("alpaca-py not installed. Run: python3 -m pip install alpaca-py (or: pip install -r requirements.txt)")
         return False
     client = _client()
     if client is None:
-        print("[executor] APCA_API_KEY_ID / APCA_API_SECRET_KEY not set", file=sys.stderr)
+        log.error("APCA_API_KEY_ID / APCA_API_SECRET_KEY not set")
         return False
     side = OrderSide.BUY if decision.action == "buy" else OrderSide.SELL
     try:
@@ -47,8 +49,8 @@ def place_order(decision: Decision) -> bool:
             time_in_force=TimeInForce.DAY,
         )
         order = client.submit_order(req)
-        print(f"[executor] {decision.action.upper()} {decision.qty} {decision.symbol} -> order id={getattr(order, 'id', '?')}")
+        log.info("%s %d %s -> order id=%s", decision.action.upper(), decision.qty, decision.symbol, getattr(order, "id", "?"))
         return True
     except Exception as e:
-        print(f"[executor] order failed: {e}", file=sys.stderr)
+        log.exception("order failed: %s", e)
         return False
