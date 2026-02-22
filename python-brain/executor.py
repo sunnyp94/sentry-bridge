@@ -32,7 +32,7 @@ def place_order(decision: Decision) -> bool:
     if decision.action == "hold" or decision.qty <= 0:
         return False
     if TradingClient is None or MarketOrderRequest is None:
-        print("[executor] alpaca-py not installed; pip install alpaca-py", file=sys.stderr)
+        print("[executor] alpaca-py not installed. Run: python3 -m pip install alpaca-py  (or: pip install -r requirements.txt)", file=sys.stderr)
         return False
     client = _client()
     if client is None:
