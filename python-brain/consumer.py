@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 """
-Brain consumer: reads NDJSON events from stdin (piped from Go engine).
-- Logs all events (trades, quotes, news, volatility, positions, orders).
-- Strategy: on news, computes sentiment + probability of gain and decides buy/sell/hold.
-- Executor: when paper trading is enabled, places orders on Alpaca (paper account).
+Brain consumer: entry point for the Python brain. Reads NDJSON events from stdin (piped from Go).
+- Updates in-memory state from each event (prices, volatility, positions, orders).
+- On news: runs composite score (news + social + momentum), consensus rule, then strategy.decide().
+- On positions: refreshes account equity for daily-cap rule and runs stop-loss check.
+- When strategy returns buy/sell and TRADE_PAPER=true, executor places a market order on Alpaca (paper).
 
-Positions = your current holdings (e.g. 10 shares AAPL). Orders = open buy/sell
-orders not yet filled. Go sends these so the strategy knows what you own and
-what's already pending.
-
-Run by the Go engine when BRAIN_CMD is set. Set APCA_API_KEY_ID, APCA_API_SECRET_KEY
-and TRADE_PAPER=true to enable paper trading (strategy decides; executor places orders).
+Run by the Go engine via BRAIN_CMD. Requires APCA_API_KEY_ID, APCA_API_SECRET_KEY for paper orders.
 """
 import json
 import logging
@@ -29,12 +25,17 @@ from strategy import (
     probability_gain,
     decide,
     Decision,
+    STOP_LOSS_PCT,
 )
+from signals.composite import composite_score
+from rules.consensus import consensus_allows_buy
+from rules.daily_cap import update_equity, is_daily_cap_reached
 
 log = logging.getLogger("brain")
 
 
 def format_ts(ts: str) -> str:
+    """Format ISO ts for log output (HH:MM:SS)."""
     try:
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).strftime("%H:%M:%S")
     except Exception:
@@ -42,6 +43,7 @@ def format_ts(ts: str) -> str:
 
 
 def log_event(ev: dict) -> None:
+    """Log one event (trade, quote, news, volatility, positions, orders) at INFO with key fields."""
     typ = ev.get("type", "?")
     ts = format_ts(ev.get("ts", ""))
     payload = ev.get("payload") or {}
@@ -76,17 +78,16 @@ def log_event(ev: dict) -> None:
         log.info("event type=%s payload=%s ts=%s", typ, json.dumps(payload)[:80], ts)
 
 
-# --- Strategy state (updated from events) ---
+# --- In-memory state (updated from Go events) ---
+# last_payload_by_symbol: latest trade/quote/volatility per symbol (for prob_gain and composite momentum).
+# positions_qty / position_unrealized_pl_pct: from positions events; used for stop loss and decide().
 sentiment_by_symbol: dict[str, float] = defaultdict(float)
 last_payload_by_symbol: dict[str, dict] = {}
 positions_qty: dict[str, int] = {}   # symbol -> signed qty (long positive)
-position_unrealized_pl_pct: dict[str, float] = {}  # symbol -> decimal e.g. -0.05 for -5%
+position_unrealized_pl_pct: dict[str, float] = {}  # symbol -> unrealized PnL as decimal (e.g. -0.05 = -5%)
 session_by_symbol: dict[str, str] = defaultdict(lambda: "regular")
-ORDER_COOLDOWN_SEC = 60
+ORDER_COOLDOWN_SEC = 60  # seconds between orders per symbol
 last_order_time_by_symbol: dict[str, float] = {}
-
-# 5% stop loss (must match strategy.STOP_LOSS_PCT)
-STOP_LOSS_PCT_DECIMAL = 0.05
 
 
 def _parse_unrealized_plpc(raw) -> float | None:
@@ -122,7 +123,6 @@ def _try_place_order(d: Decision) -> bool:
 
 def run_stop_loss_check() -> None:
     """On positions update: sell any position at or below 5% loss (STOP_LOSS_PCT)."""
-    from strategy import STOP_LOSS_PCT
     stop_decimal = STOP_LOSS_PCT / 100.0
     for sym, pl_pct in position_unrealized_pl_pct.items():
         if pl_pct is None or pl_pct > -stop_decimal:
@@ -141,7 +141,7 @@ def run_stop_loss_check() -> None:
         prob = probability_gain(combined)
         sent_ema = get_sentiment_ema(sym)
         sess = session_by_symbol.get(sym, "regular")
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct)
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=True, daily_cap_reached=is_daily_cap_reached())
         if d.action == "sell" and d.qty > 0:
             log.warning("stop_loss symbol=%s pl_pct=%.2f%% sell qty=%d reason=%s", d.symbol, pl_pct * 100, d.qty, d.reason)
             _try_place_order(d)
@@ -151,18 +151,21 @@ def run_strategy_on_news(payload: dict) -> None:
     symbols = payload.get("symbols") or []
     if not symbols:
         return
-    # FinBERT (or VADER) on headline + summary for smarter signal; then EMA per symbol
-    sent_raw = sentiment_score_from_news(payload)
-    # Kill switch: very bad news disables all new buys (market tanks / bad news)
-    set_kill_switch_from_news(sent_raw)
+    # Composite: News + Social (placeholder) + Momentum; consensus = e.g. 2 of 3 sources positive
+    composite_result = composite_score(news_payload=payload, symbol_payload=None, social_score=None)
+    raw_news = composite_result.sources["news"]
+    set_kill_switch_from_news(raw_news)
+    consensus_ok = consensus_allows_buy(composite_result)
+    daily_cap = is_daily_cap_reached()
     for sym in symbols:
-        sentiment_by_symbol[sym] = sent_raw
-    for sym in symbols:
-        sent_ema = update_and_get_sentiment_ema(sym, sent_raw)
         combined = dict(last_payload_by_symbol.get(sym, {}))
         combined.setdefault("return_1m", 0)
         combined.setdefault("return_5m", 0)
         combined.setdefault("annualized_vol_30d", 0)
+        # Per-symbol composite (momentum differs per symbol)
+        cr_sym = composite_score(news_payload=payload, symbol_payload=combined, social_score=None)
+        sentiment_by_symbol[sym] = cr_sym.composite
+        sent_ema = update_and_get_sentiment_ema(sym, cr_sym.composite)
         prob = probability_gain(combined)
         pos_qty = positions_qty.get(sym, 0)
         try:
@@ -171,12 +174,16 @@ def run_strategy_on_news(payload: dict) -> None:
             pos_qty = 0
         sess = session_by_symbol.get(sym, "regular")
         pl_pct = position_unrealized_pl_pct.get(sym)
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct)
-        log.info("strategy symbol=%s sentiment_raw=%.2f sentiment_ema=%.2f prob_gain=%.2f -> action=%s qty=%d reason=%s", d.symbol, sent_raw, sent_ema, prob, d.action, d.qty, d.reason)
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=consensus_ok, daily_cap_reached=daily_cap)
+        log.info(
+            "strategy symbol=%s sources=%s sentiment_ema=%.2f prob_gain=%.2f consensus_ok=%s -> action=%s qty=%d reason=%s",
+            d.symbol, cr_sym.sources, sent_ema, prob, consensus_ok, d.action, d.qty, d.reason,
+        )
         _try_place_order(d)
 
 
 def handle_event(ev: dict) -> None:
+    """Update state from event and run strategy/stop-loss when relevant (news, positions)."""
     typ = ev.get("type", "?")
     payload = ev.get("payload") or {}
 
@@ -215,6 +222,14 @@ def handle_event(ev: dict) -> None:
             plpc = _parse_unrealized_plpc(p.get("unrealized_plpc"))
             if plpc is not None:
                 position_unrealized_pl_pct[sym] = plpc
+        # Refresh equity for daily cap rule (0.2% shutdown)
+        try:
+            from executor import get_account_equity
+            eq = get_account_equity()
+            if eq is not None:
+                update_equity(eq)
+        except Exception:
+            pass
         run_stop_loss_check()
     elif typ == "news":
         run_strategy_on_news(payload)
