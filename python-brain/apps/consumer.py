@@ -20,6 +20,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
+_PERF = time.perf_counter
+
 from brain.strategy import (
     sentiment_score_from_news,
     update_and_get_sentiment_ema,
@@ -34,6 +36,8 @@ from brain.strategy import (
 from brain.signals.composite import composite_score
 from brain.rules.consensus import consensus_allows_buy
 from brain.rules.daily_cap import update_equity, is_daily_cap_reached
+from brain.rules.drawdown import update_drawdown_peak, is_drawdown_halt
+from brain import config as brain_config
 
 log = logging.getLogger("brain")
 
@@ -90,6 +94,8 @@ position_unrealized_pl_pct: dict[str, float] = {}
 session_by_symbol: dict[str, str] = defaultdict(lambda: "regular")
 ORDER_COOLDOWN_SEC = 60
 last_order_time_by_symbol: dict[str, float] = {}
+# Cached equity from last positions event (avoids extra Alpaca call when sizing a buy)
+_last_equity: Optional[float] = None
 
 
 def _parse_unrealized_plpc(raw) -> Optional[float]:
@@ -105,8 +111,21 @@ def _parse_unrealized_plpc(raw) -> Optional[float]:
     return v
 
 
+def _get_price(symbol: str) -> Optional[float]:
+    """Last known price or mid for symbol (from trade/quote payload)."""
+    p = last_payload_by_symbol.get(symbol, {})
+    price = p.get("price")
+    if price is not None and price > 0:
+        return float(price)
+    mid = p.get("mid")
+    if mid is not None and mid > 0:
+        return float(mid)
+    return None
+
+
 def _try_place_order(d: Decision) -> bool:
-    """If decision is buy/sell with qty, respect cooldown and place order. Returns True if placed."""
+    """If decision is buy/sell with qty, respect cooldown, apply position sizing (buy), and place order. Returns True if placed."""
+    global _last_equity
     if d.action not in ("buy", "sell") or d.qty <= 0:
         return False
     now = time.time()
@@ -115,8 +134,21 @@ def _try_place_order(d: Decision) -> bool:
         return False
     if os.environ.get("TRADE_PAPER", "true").lower() not in ("true", "1", "yes"):
         return False
-    from brain.executor import place_order
-    if place_order(d):
+    from brain.executor import place_order, get_account_equity
+    price = _get_price(d.symbol)
+    # Position sizing: buy qty from % of equity when POSITION_SIZE_PCT > 0 (use cached equity from last positions event to avoid extra API call)
+    if d.action == "buy" and brain_config.POSITION_SIZE_PCT > 0 and price and price > 0:
+        equity = _last_equity
+        if equity is None or equity <= 0:
+            equity = get_account_equity()
+            if equity is not None:
+                _last_equity = equity
+        if equity and equity > 0:
+            qty = int((equity * brain_config.POSITION_SIZE_PCT) / price)
+            qty = max(1, min(qty, brain_config.STRATEGY_MAX_QTY))
+            d = Decision(d.action, d.symbol, qty, d.reason)
+            log.info("position_size equity=%.2f pct=%.2f%% price=%.2f -> qty=%d", equity, brain_config.POSITION_SIZE_PCT * 100, price, qty)
+    if place_order(d, current_price=price):
         last_order_time_by_symbol[d.symbol] = now
         return True
     return False
@@ -152,11 +184,15 @@ def run_strategy_on_news(payload: dict) -> None:
     symbols = payload.get("symbols") or []
     if not symbols:
         return
+    t0 = _PERF()
     composite_result = composite_score(news_payload=payload, symbol_payload=None, social_score=None)
     raw_news = composite_result.sources["news"]
     set_kill_switch_from_news(raw_news)
     consensus_ok = consensus_allows_buy(composite_result)
     daily_cap = is_daily_cap_reached()
+    drawdown_halt = is_drawdown_halt()
+    composite_ms = (_PERF() - t0) * 1000
+    t1 = _PERF()
     for sym in symbols:
         combined = dict(last_payload_by_symbol.get(sym, {}))
         combined.setdefault("return_1m", 0)
@@ -173,12 +209,14 @@ def run_strategy_on_news(payload: dict) -> None:
             pos_qty = 0
         sess = session_by_symbol.get(sym, "regular")
         pl_pct = position_unrealized_pl_pct.get(sym)
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=consensus_ok, daily_cap_reached=daily_cap)
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=consensus_ok, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt)
         log.info(
             "strategy symbol=%s sources=%s sentiment_ema=%.2f prob_gain=%.2f consensus_ok=%s -> action=%s qty=%d reason=%s",
             d.symbol, cr_sym.sources, sent_ema, prob, consensus_ok, d.action, d.qty, d.reason,
         )
         _try_place_order(d)
+    strategy_ms = (_PERF() - t1) * 1000
+    log.info("latency step=news composite_ms=%.1f strategy_ms=%.1f", composite_ms, strategy_ms)
 
 
 def handle_event(ev: dict) -> None:
@@ -203,6 +241,7 @@ def handle_event(ev: dict) -> None:
         if sym:
             last_payload_by_symbol[sym] = {**last_payload_by_symbol.get(sym, {}), **payload}
     elif typ == "positions":
+        global _last_equity
         positions_qty.clear()
         position_unrealized_pl_pct.clear()
         for p in payload.get("positions") or []:
@@ -221,14 +260,22 @@ def handle_event(ev: dict) -> None:
             plpc = _parse_unrealized_plpc(p.get("unrealized_plpc"))
             if plpc is not None:
                 position_unrealized_pl_pct[sym] = plpc
+        get_equity_ms = 0.0
         try:
             from brain.executor import get_account_equity
+            t0 = _PERF()
             eq = get_account_equity()
+            get_equity_ms = (_PERF() - t0) * 1000
             if eq is not None:
+                _last_equity = eq
                 update_equity(eq)
+                update_drawdown_peak(eq)
         except Exception:
             pass
+        t1 = _PERF()
         run_stop_loss_check()
+        stop_loss_ms = (_PERF() - t1) * 1000
+        log.info("latency step=positions get_equity_ms=%.1f stop_loss_ms=%.1f", get_equity_ms, stop_loss_ms)
     elif typ == "news":
         run_strategy_on_news(payload)
 
@@ -251,7 +298,9 @@ def main() -> None:
         try:
             ev = json.loads(line)
             log_event(ev)
+            t0 = _PERF()
             handle_event(ev)
+            log.info("latency step=event_handle type=%s ms=%.1f", ev.get("type", "?"), (_PERF() - t0) * 1000)
         except json.JSONDecodeError as e:
             log.error("invalid JSON: %s", e)
         except Exception as e:

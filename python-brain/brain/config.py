@@ -8,7 +8,9 @@ Quick reference (env name = default):
   Daily cap:    DAILY_CAP_ENABLED, DAILY_CAP_PCT
   Buy:          SENTIMENT_BUY_THRESHOLD, SENTIMENT_BUY_MIN_CONFIDENCE, PROB_GAIN_THRESHOLD
   Sell:         SENTIMENT_SELL_THRESHOLD, PROB_GAIN_SELL_THRESHOLD
-  Sizing:       STRATEGY_MAX_QTY, STRATEGY_REGULAR_SESSION_ONLY
+  Sizing:       STRATEGY_MAX_QTY, POSITION_SIZE_PCT, STRATEGY_REGULAR_SESSION_ONLY
+  Limit orders: USE_LIMIT_ORDERS, LIMIT_ORDER_OFFSET_BPS
+  Drawdown:     DRAWDOWN_HALT_ENABLED, MAX_DRAWDOWN_PCT
   Kill switch:  KILL_SWITCH_SENTIMENT_THRESHOLD, KILL_SWITCH_RETURN_THRESHOLD
   Stop loss:    STOP_LOSS_PCT
   Opening:      NO_TRADE_FIRST_MINUTES_AFTER_OPEN
@@ -66,7 +68,21 @@ PROB_GAIN_SELL_THRESHOLD = _float("PROB_GAIN_SELL_THRESHOLD", "0.42")
 # Sizing and session
 # -----------------------------------------------------------------------------
 STRATEGY_MAX_QTY = _int("STRATEGY_MAX_QTY", "2")
+# Position sizing: buy qty = (equity * POSITION_SIZE_PCT) / price, clamped to [1, STRATEGY_MAX_QTY]. 0 = use fixed qty (1).
+POSITION_SIZE_PCT = _float("POSITION_SIZE_PCT", "0")  # e.g. 0.02 = 2% of equity per position
 STRATEGY_REGULAR_SESSION_ONLY = _bool("STRATEGY_REGULAR_SESSION_ONLY", "true")
+
+# -----------------------------------------------------------------------------
+# Limit orders (avoid market-order slippage; buy below mid, sell above mid)
+# -----------------------------------------------------------------------------
+USE_LIMIT_ORDERS = _bool("USE_LIMIT_ORDERS", "true")
+LIMIT_ORDER_OFFSET_BPS = _float("LIMIT_ORDER_OFFSET_BPS", "5")  # 5 bps = 0.05%; buy at mid*(1 - 0.0005), sell at mid*(1 + 0.0005)
+
+# -----------------------------------------------------------------------------
+# Max drawdown halt (no new buys when drawdown from peak >= this %)
+# -----------------------------------------------------------------------------
+DRAWDOWN_HALT_ENABLED = _bool("DRAWDOWN_HALT_ENABLED", "true")
+MAX_DRAWDOWN_PCT = _float("MAX_DRAWDOWN_PCT", "2.0")
 
 # -----------------------------------------------------------------------------
 # Kill switch (no new buys when very bad news or sharp negative returns)

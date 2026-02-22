@@ -119,11 +119,13 @@ def decide(
     unrealized_pl_pct: Optional[float] = None,
     consensus_ok: bool = True,
     daily_cap_reached: bool = False,
+    drawdown_halt: bool = False,
 ) -> Decision:
     """
     Orchestrate rules and thresholds into a single decision.
     consensus_ok: require multiple sources positive (see rules.consensus).
     daily_cap_reached: 0.2% shutdown - no new buys (see rules.daily_cap).
+    drawdown_halt: no new buys when drawdown from peak >= MAX_DRAWDOWN_PCT (see rules.drawdown).
     """
     buy_thresh = config.SENTIMENT_BUY_THRESHOLD
     buy_min_conf = config.SENTIMENT_BUY_MIN_CONFIDENCE
@@ -153,6 +155,10 @@ def decide(
     # Buy: daily cap (0.2% shutdown - lock in gains)
     if daily_cap_reached:
         return Decision("hold", symbol, 0, "daily_cap_reached")
+
+    # Buy: max drawdown halt
+    if drawdown_halt:
+        return Decision("hold", symbol, 0, "drawdown_halt")
 
     # Buy: opening window
     if not have_position and is_in_opening_no_trade_window():
