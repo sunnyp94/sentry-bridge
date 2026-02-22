@@ -1,0 +1,25 @@
+# Full stack: Go engine + Redis + Python brain. Same file for local and deploy.
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379
+      BRAIN_CMD: "python3 /app/python-brain/consumer.py"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+volumes:
+  redis_data:
