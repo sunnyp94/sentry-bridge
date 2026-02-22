@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
-	"log"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"sync"
@@ -47,7 +47,7 @@ func StartPipe(cmdLine string) (*Pipe, error) {
 		p.mu.Lock()
 		p.closed = true
 		p.mu.Unlock()
-		log.Printf("[brain] process exited")
+		slog.Info("brain process exited")
 	}()
 	return p, nil
 }
@@ -88,6 +88,7 @@ func (p *Pipe) Close() error {
 	return p.cmd.Wait()
 }
 
+// splitCmd splits the brain command line on spaces so exec.Command gets separate program and args.
 func splitCmd(s string) []string {
 	var parts []string
 	for _, p := range strings.Fields(s) {

@@ -3,7 +3,7 @@ package alpaca
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -41,13 +41,6 @@ func NewPriceStream(streamBaseURL, keyID, secretKey, feed string, symbols []stri
 		symbols:   symbols,
 		prices:    make(map[string]float64),
 	}
-}
-
-// LastPrice returns the latest price for the symbol (0 if unknown).
-func (p *PriceStream) LastPrice(symbol string) float64 {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.prices[symbol]
 }
 
 // Run connects, authenticates, subscribes to trades and quotes, and processes messages until ctx is done or connection fails.
@@ -93,7 +86,7 @@ func (p *PriceStream) Run() error {
 		return err
 	}
 
-	log.Printf("[stream] connected to %s, subscribed to %v", url, p.symbols)
+	slog.Info("stream connected", "url", url, "symbols", p.symbols)
 
 	for {
 		_, data, err := conn.ReadMessage()
@@ -101,7 +94,7 @@ func (p *PriceStream) Run() error {
 			return fmt.Errorf("read: %w", err)
 		}
 		if err := p.handleMessage(data); err != nil {
-			log.Printf("[stream] handle message: %v", err)
+			slog.Error("stream handle message", "err", err)
 		}
 	}
 }

@@ -167,6 +167,20 @@ To verify that events (including news) flow from Go to Redis to Python:
 
 To test with Docker (Go + Redis in one stack), run `docker compose up --build` in one terminal and the Python Redis consumer in another (same `REDIS_URL=redis://localhost:6379`; Redis is exposed on the host).
 
+## Logging
+
+All components use structured logging with configurable levels.
+
+**Go (slog):**
+- **LOG_LEVEL:** `DEBUG` | `INFO` (default) | `WARN` | `ERROR`. Reduces noise (e.g. `DEBUG` for every trade/quote).
+- **LOG_FORMAT:** `json` for one-JSON-object-per-line to stderr (for log aggregators); omit for human-readable text.
+- Example: `LOG_LEVEL=INFO LOG_FORMAT=json` when deploying.
+
+**Python (brain, executor, strategy, redis_consumer):**
+- **LOG_LEVEL:** Same as Go (`DEBUG`, `INFO`, `WARN`, `ERROR`). Default `INFO`.
+- Format: `%(asctime)s [%(levelname)s] %(name)s: %(message)s` to stderr. The brain calls `log_config.init()` so all loggers share this.
+- Example: `LOG_LEVEL=DEBUG python3 consumer.py` for verbose event logs.
+
 ### Streaming mode (default — high-frequency)
 
 By default the app runs in **streaming mode**:
@@ -199,7 +213,7 @@ The Python brain (`python-brain/consumer.py`) reads stdin, logs events, and runs
 
 The brain decides when to buy or sell using:
 
-- **Sentiment:** VADER on news headlines (default). Optional: [FinBERT](https://huggingface.co/ProsusAI/finbert) (finance-trained transformer) for stronger signal — install with `python3 -m pip install -r python-brain/requirements-ai.txt`.
+- **Sentiment:** [FinBERT](https://huggingface.co/ProsusAI/finbert) (finance-trained transformer) on news headline + summary; falls back to VADER if unavailable. Install deps with `python3 -m pip install -r python-brain/requirements.txt`.
 - **Probability of gain:** Heuristic from `return_1m`, `return_5m`, and `annualized_vol_30d` (from the stream).
 - **Rules:** Buy when sentiment and prob_gain are above thresholds and you have no position; sell when sentiment is bearish or prob_gain drops and you have a position. Trades only during **regular session** unless you set `STRATEGY_REGULAR_SESSION_ONLY=false`. One order per symbol per 60s (cooldown).
 
@@ -226,6 +240,15 @@ The brain decides when to buy or sell using:
    PROB_GAIN_THRESHOLD=0.54       # buy only when prob_gain >= this
    STRATEGY_MAX_QTY=2             # max shares per order
    STRATEGY_REGULAR_SESSION_ONLY=true
+   # Composite: require 2 of 3 sources (news, social, momentum) positive to buy; avoid single sensational headline
+   USE_CONSENSUS=true
+   CONSENSUS_MIN_SOURCES_POSITIVE=2
+   CONSENSUS_POSITIVE_THRESHOLD=0.15
+   # 0.2% daily shutdown: no new buys when daily PnL >= 0.2% (lock in gains)
+   DAILY_CAP_ENABLED=true
+   DAILY_CAP_PCT=0.2
+   # No new buys in first 15 min after market open (9:30–9:44 AM ET); sells (e.g. stop loss) still allowed
+   NO_TRADE_FIRST_MINUTES_AFTER_OPEN=15
    # Kill switch: blocks all new buys when triggered (sticky until restart)
    KILL_SWITCH=false              # set true to disable buys manually
    KILL_SWITCH_SENTIMENT_THRESHOLD=-0.50   # bad news: trigger if headline+summary sentiment <= this
@@ -243,7 +266,28 @@ The brain decides when to buy or sell using:
    set -a && source .env && set +a && cd go-engine && go run .
    ```
 
-You should see `[strategy] AAPL sentiment=0.42 prob_gain=0.58 -> buy qty=1 (...)` and `[executor] BUY 1 AAPL -> order id=...` when the strategy triggers. Orders are **market, day** on your Alpaca **paper** account (same as `APCA_API_BASE_URL=https://paper-api.alpaca.markets`). Set `TRADE_PAPER=false` to log decisions only and not place orders.
+You should see strategy logs with `sources=... consensus_ok=... -> action=...` and `[executor] BUY 1 AAPL -> order id=...` when the strategy triggers. Orders are **market, day** on your Alpaca **paper** account. Set `TRADE_PAPER=false` to log decisions only and not place orders.
+
+**Composite score (3 sources):** By default the bot uses **News** (FinBERT) + **Social** (placeholder) + **Momentum** (returns). It only buys when at least **2 of 3** sources are "positive" (`CONSENSUS_MIN_SOURCES_POSITIVE=2`), so a single sensational headline doesn’t drive trades. If News is positive but Social is "meh," the bot stays cash. Set `USE_CONSENSUS=false` to use a single news score as before.
+
+**0.2% daily shutdown:** When daily PnL ≥ `DAILY_CAP_PCT` (default **0.2%**), the bot stops **new buys** for the day (sells still allowed). Set `DAILY_CAP_ENABLED=false` to disable.
+
+### Python brain: modular design
+
+The Python brain is split so you can add or change business rules without rewriting the core:
+
+| Layer | Role |
+|-------|------|
+| **config.py** | All thresholds and flags from env (e.g. `CONSENSUS_MIN_SOURCES_POSITIVE`, `DAILY_CAP_PCT`). |
+| **signals/** | **news_sentiment** = FinBERT/VADER on news. **composite** = News + Social (placeholder) + Momentum and consensus. |
+| **rules/** | **consensus** = allow buy only when enough sources positive. **daily_cap** = block new buys when daily PnL ≥ 0.2%. |
+| **strategy.py** | Orchestrates: applies rules (kill switch, daily cap, opening window, consensus, stop loss) and returns buy/sell/hold. |
+| **consumer.py** | Reads events, updates state, calls composite + strategy + executor. |
+| **executor.py** | Places orders on Alpaca; exposes `get_account_equity()` for daily cap. |
+
+**Adding a business rule:** Add a new module under `rules/` (e.g. `rules/max_drawdown.py`) that exports something like `is_rule_blocking_buy() -> bool`. In `strategy.decide()`, pass that into the existing “block buy” checks and add a new `Decision("hold", ..., "max_drawdown")` branch. No need to change signals or consumer.
+
+**Go ↔ Python transport:** Today the Go engine streams NDJSON to the brain over **stdin** (pipe). For lower latency you can later switch to **Unix sockets** or **gRPC** from Go and a matching client in Python; the brain’s entry point remains “receive events, update state, run strategy, optionally place order.”
 
 ### Redis stream (optional)
 
