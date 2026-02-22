@@ -25,14 +25,36 @@ func Load() (*Config, error) {
 	}
 	tickers := parseTickers(tickersStr)
 	stream := strings.ToLower(os.Getenv("STREAM")) != "false" && strings.ToLower(os.Getenv("STREAM")) != "0"
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = os.Getenv("REDIS_ADDR")
+	}
+	tradingBaseURL := os.Getenv("APCA_API_BASE_URL")
+	if tradingBaseURL == "" {
+		tradingBaseURL = "https://paper-api.alpaca.markets"
+	}
+	// Brain closest to data: Go pipes events to this process via stdin (NDJSON).
+	// e.g. "python3 python-brain/consumer.py" when run from project root.
+	brainCmd := os.Getenv("BRAIN_CMD")
 	return &Config{
-		APIKeyID:      os.Getenv("APCA_API_KEY_ID"),
-		APISecretKey:  os.Getenv("APCA_API_SECRET_KEY"),
-		DataBaseURL:   baseURL,
-		StreamWSURL:   streamWSURL,
-		Tickers:       tickers,
-		StreamingMode: stream,
+		APIKeyID:       os.Getenv("APCA_API_KEY_ID"),
+		APISecretKey:   os.Getenv("APCA_API_SECRET_KEY"),
+		DataBaseURL:    baseURL,
+		StreamWSURL:    streamWSURL,
+		TradingBaseURL: tradingBaseURL,
+		Tickers:        tickers,
+		StreamingMode:  stream,
+		RedisURL:       redisURL,
+		RedisStream:    envOrDefault("REDIS_STREAM", "market:updates"),
+		BrainCmd:       brainCmd,
 	}, nil
+}
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 // dataURLToStreamWS converts https://data.alpaca.markets -> wss://stream.data.alpaca.markets
@@ -55,10 +77,14 @@ func parseTickers(s string) []string {
 }
 
 type Config struct {
-	APIKeyID      string
-	APISecretKey  string
-	DataBaseURL   string
-	StreamWSURL   string
-	Tickers       []string
-	StreamingMode bool
+	APIKeyID       string
+	APISecretKey   string
+	DataBaseURL    string
+	StreamWSURL    string
+	TradingBaseURL string
+	Tickers        []string
+	StreamingMode  bool
+	RedisURL       string
+	RedisStream    string
+	BrainCmd       string
 }

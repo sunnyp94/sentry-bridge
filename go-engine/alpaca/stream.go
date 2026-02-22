@@ -23,9 +23,9 @@ type PriceStream struct {
 	mu     sync.RWMutex
 	prices map[string]float64
 
-	// Callbacks (optional)
+	// Callbacks (optional). Quote includes bid/ask size for order-book context.
 	OnTrade func(symbol string, price float64, size int, t time.Time)
-	OnQuote func(symbol string, bid, ask float64, t time.Time)
+	OnQuote func(symbol string, bid, ask float64, bidSize, askSize int, t time.Time)
 }
 
 // NewPriceStream creates a stream for v2/iex (or v2/sip). Use feed "iex" for free tier.
@@ -151,13 +151,15 @@ func (p *PriceStream) handleMessage(data []byte) error {
 		case "q":
 			bp, _ := m["bp"].(float64)
 			ap, _ := m["ap"].(float64)
+			bs, _ := m["bs"].(float64)
+			as, _ := m["as"].(float64)
 			mid := (bp + ap) / 2
 			if mid > 0 {
 				p.setPrice(sym, mid)
 			}
 			ts := parseTime(m["t"])
 			if p.OnQuote != nil {
-				p.OnQuote(sym, bp, ap, ts)
+				p.OnQuote(sym, bp, ap, int(bs), int(as), ts)
 			}
 		}
 	}
