@@ -1,3 +1,6 @@
+// Package alpaca provides clients for Alpaca Market Data (REST + WebSocket) and Trading API.
+// Client: REST for news, snapshots, bars. PriceStream: WebSocket for trades/quotes. NewsStream: WebSocket for news.
+// TradingClient: REST for positions and open orders (read-only from Go; Python places orders).
 package alpaca
 
 import (
@@ -10,7 +13,7 @@ import (
 	"time"
 )
 
-// Client calls Alpaca Market Data API (news, snapshots, bars).
+// Client calls Alpaca Market Data API (news, snapshots, bars) over REST.
 type Client struct {
 	baseURL    string
 	keyID      string

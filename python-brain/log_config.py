@@ -1,6 +1,6 @@
 """
-Shared logging config: timestamp, level, logger name. LOG_LEVEL from env (default INFO).
-Call init() from entry points (consumer.main, redis_consumer.main) so all loggers use it.
+Shared logging: one handler to stderr with timestamp, level, logger name. LOG_LEVEL from env (default INFO).
+Call init() at startup from consumer.main or redis_consumer.main so brain/strategy/executor loggers use it.
 """
 import logging
 import os
@@ -8,6 +8,7 @@ import sys
 
 
 def init() -> None:
+    """Configure root logger: LOG_LEVEL (DEBUG/INFO/WARN/ERROR), format to stderr."""
     level_name = (os.environ.get("LOG_LEVEL") or "INFO").strip().upper()
     level = getattr(logging, level_name, logging.INFO)
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

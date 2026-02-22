@@ -1,9 +1,12 @@
+// Package redis provides a Redis Stream publisher for brain events. Used when REDIS_URL is set
+// so other consumers (e.g. python-brain/redis_consumer.py) can read the same stream. Main uses
+// PublisherInterface so it can swap in NoopPublisher when Redis is not configured.
 package redis
 
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -56,7 +59,7 @@ func (p *Publisher) Publish(ctx context.Context, event BrainEvent) error {
 	}).Err()
 }
 
-// PublishJSON sends a pre-built payload map as the event (type and ts added if missing).
+// PublishJSON sends a pre-built payload map; type and ts are set in the stream entry (payload remains JSON).
 func (p *Publisher) PublishJSON(ctx context.Context, eventType string, payload map[string]interface{}) error {
 	if payload == nil {
 		payload = make(map[string]interface{})
@@ -106,6 +109,6 @@ var (
 // LogErr logs a Redis publish error without failing the stream.
 func LogErr(err error, eventType string) {
 	if err != nil {
-		log.Printf("[redis] %s publish error: %v", eventType, err)
+		slog.Error("redis publish error", "event_type", eventType, "err", err)
 	}
 }

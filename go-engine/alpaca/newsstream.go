@@ -3,7 +3,7 @@ package alpaca
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -74,7 +74,7 @@ func (n *NewsStream) Run() error {
 		return err
 	}
 
-	log.Printf("[news stream] connected to %s", url)
+	slog.Info("news stream connected", "url", url)
 
 	for {
 		_, data, err := conn.ReadMessage()
@@ -82,7 +82,7 @@ func (n *NewsStream) Run() error {
 			return fmt.Errorf("read: %w", err)
 		}
 		if err := n.handleMessage(data); err != nil {
-			log.Printf("[news stream] handle: %v", err)
+			slog.Error("news stream handle", "err", err)
 		}
 	}
 }

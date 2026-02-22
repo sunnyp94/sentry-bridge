@@ -1,3 +1,4 @@
+// Package brain provides the pipe to the Python subprocess and in-memory state for price/volume/returns.
 package brain
 
 import (
@@ -5,22 +6,23 @@ import (
 	"time"
 )
 
-const (
-	lookback = 6 * time.Minute
-)
+// lookback is how long we keep price/volume points for computing returns and volume_1m/5m.
+const lookback = 6 * time.Minute
 
+// pricePoint is a single (time, price) used to compute return_1m and return_5m.
 type pricePoint struct {
 	t time.Time
 	p float64
 }
 
+// volumePoint is a single (time, size) for volume_1m and volume_5m.
 type volumePoint struct {
 	t time.Time
 	v int
 }
 
-// State holds per-symbol price/volume history for returns and volume metrics (1m, 5m).
-// Session is computed from current time (ET). Volatility is set externally.
+// State holds per-symbol price/volume history and volatility. Used to build return_1m, return_5m,
+// volume_1m, volume_5m for each trade/quote payload sent to the brain. Volatility is set from bars in main.
 type State struct {
 	mu sync.RWMutex
 
@@ -37,6 +39,7 @@ func NewState() *State {
 	}
 }
 
+// RecordTrade appends a trade to the symbol's history and trims older than lookback so Volume1m/5m and Return1m/5m are correct.
 func (s *State) RecordTrade(symbol string, price float64, size int, t time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -46,7 +49,7 @@ func (s *State) RecordTrade(symbol string, price float64, size int, t time.Time)
 	}
 	cut := now.Add(-lookback)
 
-	// Price history
+	// Trim price history to lookback window
 	s.priceHistory[symbol] = append(s.priceHistory[symbol], pricePoint{t: now, p: price})
 	ph := s.priceHistory[symbol]
 	for len(ph) > 0 && ph[0].t.Before(cut) {
@@ -54,7 +57,7 @@ func (s *State) RecordTrade(symbol string, price float64, size int, t time.Time)
 	}
 	s.priceHistory[symbol] = ph
 
-	// Volume history
+	// Trim volume history to lookback window
 	if size > 0 {
 		s.volumeHistory[symbol] = append(s.volumeHistory[symbol], volumePoint{t: now, v: size})
 		vh := s.volumeHistory[symbol]
@@ -65,24 +68,13 @@ func (s *State) RecordTrade(symbol string, price float64, size int, t time.Time)
 	}
 }
 
-func (s *State) SetVolatility(symbol string, vol float64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.volatility[symbol] = vol
-}
-
+// SetVolatilityMap sets per-symbol volatility (e.g. from 30d bars in main). Used when building payloads.
 func (s *State) SetVolatilityMap(vol map[string]float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, v := range vol {
 		s.volatility[k] = v
 	}
-}
-
-func (s *State) GetVolatility(symbol string) float64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.volatility[symbol]
 }
 
 // Volume1m returns total trade volume in the last 1 minute for symbol.
@@ -155,6 +147,7 @@ func Session(now time.Time) string {
 	return "regular"
 }
 
+// eastern is used by Session() to classify pre_open / regular / post_close.
 var eastern *time.Location
 
 func init() {
