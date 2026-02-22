@@ -36,20 +36,21 @@ Go engine that pulls **market news**, **price**, and **volatility** from Alpaca 
 
 ## How to run
 
-### Run full stack with Docker (Go + Redis + Python brain)
+### Run locally with Docker (same as cloud)
 
-One command runs everything. **Prerequisites:** [Docker Desktop](https://docs.docker.com/desktop/install/mac-install/) installed and **running** (open the app and wait until the whale icon appears in the menu bar).
+One command runs the full stack (Go + Redis + Python brain) the same way locally and in production. **Prerequisites:** [Docker Desktop](https://docs.docker.com/desktop/install/mac-install/) installed and **running** (open the app and wait until the whale icon appears in the menu bar).
 
 1. **Create `.env`** in the project root with:
    - `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` (Alpaca)
    - `TICKERS=AAPL,MSFT,GOOGL,AMZN,TSLA` (optional)
    - Do **not** set `REDIS_URL` or `BRAIN_CMD` — the compose file sets them for the app container.
 
-2. **From the project root:**
+2. **From the project root** (either command):
    ```bash
    cd /Users/sunnypatel/Projects/sentry-bridge
    docker compose up --build
    ```
+   Or: `./run-docker.sh`
 
    This builds the app image (Go + Python brain), starts Redis, then runs the app. You’ll see Go logs, Redis stream connection, and `[brain]` lines from the Python consumer. Stop with **Ctrl+C**. Run in background with `docker compose up -d --build`.
 
@@ -95,7 +96,7 @@ From the **project root**:
 1. In `.env`: set `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, and `BRAIN_CMD="python3 python-brain/consumer.py"`. Omit or comment out `REDIS_URL` unless you run Redis via Homebrew.
 2. Run:
    ```bash
-   set -a && source .env && set +a && go run ./go-engine
+   set -a && source .env && set +a && cd go-engine && go run .
    ```
 
 Make sure `.env` contains your real Alpaca keys. Use `TICKERS=AAPL,TSLA,NVDA,META` to change symbols.
@@ -106,7 +107,7 @@ Make sure `.env` contains your real Alpaca keys. Use `TICKERS=AAPL,TSLA,NVDA,MET
 
    ```bash
    cd /Users/sunnypatel/Projects/sentry-bridge
-   set -a && source .env && set +a && go run ./go-engine
+   set -a && source .env && set +a && cd go-engine && go run .
    ```
 
 2. **With the Python brain:** add to `.env`:
@@ -127,9 +128,44 @@ Make sure `.env` contains your real Alpaca keys. Use `TICKERS=AAPL,TSLA,NVDA,MET
    ```
    You should see one `[brain] TRADE AAPL ...` line.
 
-5. **Stop:** press **Ctrl+C** in the terminal where `go run ./go-engine` is running.
+5. **Stop:** press **Ctrl+C** in the terminal where `cd go-engine && go run .` is running.
 
 **Note:** During US market hours (9:30am–4pm ET, weekdays) you’ll get live trades/quotes. Outside those hours you’ll mainly see news (if any), volatility on startup, and positions/orders every 30s.
+
+### Test the Go → Redis → Python pipeline (news and all events)
+
+To verify that events (including news) flow from Go to Redis to Python:
+
+1. **Start Redis** (Docker or Homebrew):
+   ```bash
+   docker compose up -d redis
+   # or: brew services start redis
+   ```
+
+2. **`.env`** must include:
+   ```bash
+   REDIS_URL=redis://localhost:6379
+   ```
+   Optionally comment out `BRAIN_CMD` so only Redis is used (no stdin pipe).
+
+3. **Terminal 1 — Go (writes to Redis):**
+   ```bash
+   cd /Users/sunnypatel/Projects/sentry-bridge
+   set -a && source .env && set +a && cd go-engine && go run .
+   ```
+   You should see `Redis stream: market:updates` and Go logs. News, trades, quotes, etc. are written to the stream.
+
+4. **Terminal 2 — Python (reads from Redis):**
+   ```bash
+   cd /Users/sunnypatel/Projects/sentry-bridge/python-brain
+   python3 -m pip install -r requirements.txt
+   REDIS_URL=redis://localhost:6379 REDIS_STREAM=market:updates python3 redis_consumer.py
+   ```
+   You should see `[redis] NEWS ...`, `[redis] TRADE ...`, `[redis] QUOTE ...`, etc. as events arrive. News headlines will appear when Alpaca sends them.
+
+5. **Stop:** Ctrl+C in both terminals. Optionally `docker compose down` to stop Redis.
+
+To test with Docker (Go + Redis in one stack), run `docker compose up --build` in one terminal and the Python Redis consumer in another (same `REDIS_URL=redis://localhost:6379`; Redis is exposed on the host).
 
 ### Streaming mode (default — high-frequency)
 
@@ -154,10 +190,60 @@ Run from **project root** so the path resolves:
 
 ```bash
 cd /path/to/sentry-bridge
-set -a && source .env && set +a && go run ./go-engine
+set -a && source .env && set +a && cd go-engine && go run .
 ```
 
-The Python script in `python-brain/consumer.py` reads stdin and prints each event (trade, quote, news, volatility, positions, orders). Replace that with your AI logic when ready.
+The Python brain (`python-brain/consumer.py`) reads stdin, logs events, and runs an **AI-driven strategy** on each news item: sentiment (VADER, or optional FinBERT) + probability of gain from returns/volatility → **buy / sell / hold**. When paper trading is enabled, it **places market orders** on Alpaca (paper account) for the tickers in `TICKERS`.
+
+### Paper trading (AI buy/sell)
+
+The brain decides when to buy or sell using:
+
+- **Sentiment:** VADER on news headlines (default). Optional: [FinBERT](https://huggingface.co/ProsusAI/finbert) (finance-trained transformer) for stronger signal — install with `python3 -m pip install -r python-brain/requirements-ai.txt`.
+- **Probability of gain:** Heuristic from `return_1m`, `return_5m`, and `annualized_vol_30d` (from the stream).
+- **Rules:** Buy when sentiment and prob_gain are above thresholds and you have no position; sell when sentiment is bearish or prob_gain drops and you have a position. Trades only during **regular session** unless you set `STRATEGY_REGULAR_SESSION_ONLY=false`. One order per symbol per 60s (cooldown).
+
+**Enable paper trading:**
+
+1. **Install Python deps** (from repo root):
+   ```bash
+   python3 -m pip install -r python-brain/requirements.txt
+   ```
+
+2. **`.env`** (you already have Alpaca keys for data; same keys work for paper trading):
+   ```bash
+   APCA_API_KEY_ID=...
+   APCA_API_SECRET_KEY=...
+   BRAIN_CMD=python3 python-brain/consumer.py
+   TRADE_PAPER=true
+   TICKERS=AAPL,TSLA,NVDA
+   ```
+
+3. **Optional tuning** (defaults shown):
+   ```bash
+   SENTIMENT_BUY_THRESHOLD=0.18    # buy when sentiment >= this
+   SENTIMENT_SELL_THRESHOLD=-0.18 # sell when sentiment <= this (and you have position)
+   PROB_GAIN_THRESHOLD=0.54       # buy only when prob_gain >= this
+   STRATEGY_MAX_QTY=2             # max shares per order
+   STRATEGY_REGULAR_SESSION_ONLY=true
+   # Kill switch: blocks all new buys when triggered (sticky until restart)
+   KILL_SWITCH=false              # set true to disable buys manually
+   KILL_SWITCH_SENTIMENT_THRESHOLD=-0.50   # bad news: trigger if headline+summary sentiment <= this
+   KILL_SWITCH_RETURN_THRESHOLD=-0.05      # market tanks: trigger if return_1m or return_5m <= -5%
+   # 5% stop loss on positions (sell when unrealized P&amp;L <= -5%)
+   STOP_LOSS_PCT=5.0
+   ```
+
+   **Kill switch:** When triggered (bad news, sharp negative return, or `KILL_SWITCH=true`), **no new buy** signals are issued; sells (including stop loss) still execute. Triggered automatically when news sentiment ≤ `KILL_SWITCH_SENTIMENT_THRESHOLD` or when 1m/5m return ≤ `KILL_SWITCH_RETURN_THRESHOLD`.
+
+   **Stop loss:** Every positions update (every 30s from Alpaca), any position with unrealized PnL ≤ `-STOP_LOSS_PCT`% is sold (market order). Default 5%.
+
+4. **Run** (from project root):
+   ```bash
+   set -a && source .env && set +a && cd go-engine && go run .
+   ```
+
+You should see `[strategy] AAPL sentiment=0.42 prob_gain=0.58 -> buy qty=1 (...)` and `[executor] BUY 1 AAPL -> order id=...` when the strategy triggers. Orders are **market, day** on your Alpaca **paper** account (same as `APCA_API_BASE_URL=https://paper-api.alpaca.markets`). Set `TRADE_PAPER=false` to log decisions only and not place orders.
 
 ### Redis stream (optional)
 
