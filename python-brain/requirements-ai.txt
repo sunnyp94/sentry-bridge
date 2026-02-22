@@ -1,5 +1,0 @@
-# FinBERT deps are now in requirements.txt (strategy uses FinBERT by default).
-# This file is kept for reference; install with: pip install -r requirements.txt
-transformers>=4.30.0
-torch>=2.0.0
-sentencepiece>=0.1.99
