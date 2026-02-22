@@ -9,6 +9,6 @@ services:
     env_file: .env.production
     environment:
       REDIS_URL: ${REDIS_URL}
-      BRAIN_CMD: "python3 /app/python-brain/consumer.py"
+      BRAIN_CMD: "python3 /app/python-brain/apps/consumer.py"
     restart: always
   # redis: omit; use Redis Cloud and set REDIS_URL to its URL

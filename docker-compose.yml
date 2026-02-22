@@ -16,7 +16,7 @@ services:
     env_file: .env
     environment:
       REDIS_URL: redis://redis:6379
-      BRAIN_CMD: "python3 /app/python-brain/consumer.py"
+      BRAIN_CMD: "python3 /app/python-brain/apps/consumer.py"
     depends_on:
       - redis
     restart: unless-stopped

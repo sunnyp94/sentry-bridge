@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 """
-Brain consumer: entry point for the Python brain. Reads NDJSON events from stdin (piped from Go).
-- Updates in-memory state from each event (prices, volatility, positions, orders).
-- On news: runs composite score (news + social + momentum), consensus rule, then strategy.decide().
-- On positions: refreshes account equity for daily-cap rule and runs stop-loss check.
-- When strategy returns buy/sell and TRADE_PAPER=true, executor places a market order on Alpaca (paper).
-
-Run by the Go engine via BRAIN_CMD. Requires APCA_API_KEY_ID, APCA_API_SECRET_KEY for paper orders.
+Stdin consumer: entry point when Go pipes NDJSON to the brain.
+Reads events from stdin, updates state, runs strategy (composite + rules), places paper orders when enabled.
+Invoked by Go via BRAIN_CMD, e.g. python3 /app/python-brain/apps/consumer.py
 """
+import sys
+from pathlib import Path
+
+# Ensure python-brain root is on path so "brain" package resolves (e.g. when run from Docker /app).
+_root = Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
 import json
 import logging
 import os
-import sys
 import time
 from collections import defaultdict
 from datetime import datetime
 
-from strategy import (
+from brain.strategy import (
     sentiment_score_from_news,
     update_and_get_sentiment_ema,
     get_sentiment_ema,
@@ -27,9 +30,9 @@ from strategy import (
     Decision,
     STOP_LOSS_PCT,
 )
-from signals.composite import composite_score
-from rules.consensus import consensus_allows_buy
-from rules.daily_cap import update_equity, is_daily_cap_reached
+from brain.signals.composite import composite_score
+from brain.rules.consensus import consensus_allows_buy
+from brain.rules.daily_cap import update_equity, is_daily_cap_reached
 
 log = logging.getLogger("brain")
 
@@ -79,14 +82,12 @@ def log_event(ev: dict) -> None:
 
 
 # --- In-memory state (updated from Go events) ---
-# last_payload_by_symbol: latest trade/quote/volatility per symbol (for prob_gain and composite momentum).
-# positions_qty / position_unrealized_pl_pct: from positions events; used for stop loss and decide().
 sentiment_by_symbol: dict[str, float] = defaultdict(float)
 last_payload_by_symbol: dict[str, dict] = {}
-positions_qty: dict[str, int] = {}   # symbol -> signed qty (long positive)
-position_unrealized_pl_pct: dict[str, float] = {}  # symbol -> unrealized PnL as decimal (e.g. -0.05 = -5%)
+positions_qty: dict[str, int] = {}
+position_unrealized_pl_pct: dict[str, float] = {}
 session_by_symbol: dict[str, str] = defaultdict(lambda: "regular")
-ORDER_COOLDOWN_SEC = 60  # seconds between orders per symbol
+ORDER_COOLDOWN_SEC = 60
 last_order_time_by_symbol: dict[str, float] = {}
 
 
@@ -98,7 +99,6 @@ def _parse_unrealized_plpc(raw) -> float | None:
         v = float(raw)
     except (TypeError, ValueError):
         return None
-    # If |v| > 1 assume percent (e.g. -5.5) -> -0.055
     if abs(v) > 1.0:
         v = v / 100.0
     return v
@@ -114,7 +114,7 @@ def _try_place_order(d: Decision) -> bool:
         return False
     if os.environ.get("TRADE_PAPER", "true").lower() not in ("true", "1", "yes"):
         return False
-    from executor import place_order
+    from brain.executor import place_order
     if place_order(d):
         last_order_time_by_symbol[d.symbol] = now
         return True
@@ -151,7 +151,6 @@ def run_strategy_on_news(payload: dict) -> None:
     symbols = payload.get("symbols") or []
     if not symbols:
         return
-    # Composite: News + Social (placeholder) + Momentum; consensus = e.g. 2 of 3 sources positive
     composite_result = composite_score(news_payload=payload, symbol_payload=None, social_score=None)
     raw_news = composite_result.sources["news"]
     set_kill_switch_from_news(raw_news)
@@ -162,7 +161,6 @@ def run_strategy_on_news(payload: dict) -> None:
         combined.setdefault("return_1m", 0)
         combined.setdefault("return_5m", 0)
         combined.setdefault("annualized_vol_30d", 0)
-        # Per-symbol composite (momentum differs per symbol)
         cr_sym = composite_score(news_payload=payload, symbol_payload=combined, social_score=None)
         sentiment_by_symbol[sym] = cr_sym.composite
         sent_ema = update_and_get_sentiment_ema(sym, cr_sym.composite)
@@ -222,9 +220,8 @@ def handle_event(ev: dict) -> None:
             plpc = _parse_unrealized_plpc(p.get("unrealized_plpc"))
             if plpc is not None:
                 position_unrealized_pl_pct[sym] = plpc
-        # Refresh equity for daily cap rule (0.2% shutdown)
         try:
-            from executor import get_account_equity
+            from brain.executor import get_account_equity
             eq = get_account_equity()
             if eq is not None:
                 update_equity(eq)
@@ -236,7 +233,7 @@ def handle_event(ev: dict) -> None:
 
 
 def main() -> None:
-    from log_config import init as init_logging
+    from brain.log_config import init as init_logging
     init_logging()
 
     log.info("reading from stdin (NDJSON)")

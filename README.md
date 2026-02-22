@@ -68,7 +68,7 @@ One command runs the full stack (Go + Redis + Python brain) the same way locally
 - **Environment:** Set at runtime (no `.env` in the container):
   - `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`
   - `REDIS_URL=<your-redis-cloud-url>`
-  - `BRAIN_CMD="python3 /app/python-brain/consumer.py"`
+  - `BRAIN_CMD="python3 /app/python-brain/apps/consumer.py"`
   - `TICKERS=...` (optional)
 - **Secrets:** Store Alpaca keys and Redis password in AWS Secrets Manager or Parameter Store and inject into the task/instance.
 - **Compose on a server:** You can run `docker compose` on an EC2 (or similar) and use an override for production:
@@ -82,7 +82,7 @@ Example override for “app only + Redis Cloud” (no local Redis container):
 REDIS_URL=rediss://default:YOUR_PASSWORD@your-redis-cloud-host:port
 APCA_API_KEY_ID=...
 APCA_API_SECRET_KEY=...
-BRAIN_CMD="python3 /app/python-brain/consumer.py"
+BRAIN_CMD="python3 /app/python-brain/apps/consumer.py"
 ```
 
 Then run the app container with that env; point it at Redis Cloud instead of a local Redis.
@@ -93,7 +93,7 @@ Then run the app container with that env; point it at Redis Cloud instead of a l
 
 From the **project root**:
 
-1. In `.env`: set `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, and `BRAIN_CMD="python3 python-brain/consumer.py"`. Omit or comment out `REDIS_URL` unless you run Redis via Homebrew.
+1. In `.env`: set `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, and `BRAIN_CMD="python3 python-brain/apps/consumer.py"`. Omit or comment out `REDIS_URL` unless you run Redis via Homebrew.
 2. Run:
    ```bash
    set -a && source .env && set +a && cd go-engine && go run .
@@ -112,10 +112,10 @@ Make sure `.env` contains your real Alpaca keys. Use `TICKERS=AAPL,TSLA,NVDA,MET
 
 2. **With the Python brain:** add to `.env`:
    ```bash
-   BRAIN_CMD=python3 python-brain/consumer.py
+   BRAIN_CMD=python3 python-brain/apps/consumer.py
    ```
    Then run the same command above. You should see:
-   - Go: `Brain: piping to python3 python-brain/consumer.py`
+   - Go: `Brain: piping to python3 python-brain/apps/consumer.py`
    - Go: Alpaca stream lines (`[price]`, `[quote]`, `[news]`, volatility block)
    - Python: `[brain] TRADE ...`, `[brain] QUOTE ...`, `[brain] NEWS ...`, etc., as events are piped to the consumer
 
@@ -124,7 +124,7 @@ Make sure `.env` contains your real Alpaca keys. Use `TICKERS=AAPL,TSLA,NVDA,MET
 4. **Test the Python consumer alone** (no Go): pipe a few JSON lines into it to confirm it parses and prints:
    ```bash
    cd /Users/sunnypatel/Projects/sentry-bridge
-   echo '{"type":"trade","ts":"2026-02-22T12:00:00Z","payload":{"symbol":"AAPL","price":178.5}}' | python3 python-brain/consumer.py
+   echo '{"type":"trade","ts":"2026-02-22T12:00:00Z","payload":{"symbol":"AAPL","price":178.5}}' | python3 python-brain/apps/consumer.py
    ```
    You should see one `[brain] TRADE AAPL ...` line.
 
@@ -159,7 +159,7 @@ To verify that events (including news) flow from Go to Redis to Python:
    ```bash
    cd /Users/sunnypatel/Projects/sentry-bridge/python-brain
    python3 -m pip install -r requirements.txt
-   REDIS_URL=redis://localhost:6379 REDIS_STREAM=market:updates python3 redis_consumer.py
+   REDIS_URL=redis://localhost:6379 REDIS_STREAM=market:updates python3 apps/redis_consumer.py
    ```
    You should see `[redis] NEWS ...`, `[redis] TRADE ...`, `[redis] QUOTE ...`, etc. as events arrive. News headlines will appear when Alpaca sends them.
 
@@ -179,7 +179,7 @@ All components use structured logging with configurable levels.
 **Python (brain, executor, strategy, redis_consumer):**
 - **LOG_LEVEL:** Same as Go (`DEBUG`, `INFO`, `WARN`, `ERROR`). Default `INFO`.
 - Format: `%(asctime)s [%(levelname)s] %(name)s: %(message)s` to stderr. The brain calls `log_config.init()` so all loggers share this.
-- Example: `LOG_LEVEL=DEBUG python3 consumer.py` for verbose event logs.
+- Example: `LOG_LEVEL=DEBUG python3 apps/consumer.py` for verbose event logs (run from python-brain).
 
 ### Streaming mode (default — high-frequency)
 
@@ -197,7 +197,7 @@ Set **`BRAIN_CMD`** to pipe events directly to your Python brain process via **s
 
 ```bash
 # .env
-BRAIN_CMD=python3 python-brain/consumer.py
+BRAIN_CMD=python3 python-brain/apps/consumer.py
 ```
 
 Run from **project root** so the path resolves:
@@ -207,7 +207,7 @@ cd /path/to/sentry-bridge
 set -a && source .env && set +a && cd go-engine && go run .
 ```
 
-The Python brain (`python-brain/consumer.py`) reads stdin, logs events, and runs an **AI-driven strategy** on each news item: sentiment (VADER, or optional FinBERT) + probability of gain from returns/volatility → **buy / sell / hold**. When paper trading is enabled, it **places market orders** on Alpaca (paper account) for the tickers in `TICKERS`.
+The Python brain (`python-brain/apps/consumer.py`) reads stdin, logs events, and runs an **AI-driven strategy** on each news item: sentiment (VADER, or optional FinBERT) + probability of gain from returns/volatility → **buy / sell / hold**. When paper trading is enabled, it **places market orders** on Alpaca (paper account) for the tickers in `TICKERS`.
 
 ### Paper trading (AI buy/sell)
 
@@ -228,7 +228,7 @@ The brain decides when to buy or sell using:
    ```bash
    APCA_API_KEY_ID=...
    APCA_API_SECRET_KEY=...
-   BRAIN_CMD=python3 python-brain/consumer.py
+   BRAIN_CMD=python3 python-brain/apps/consumer.py
    TRADE_PAPER=true
    TICKERS=AAPL,TSLA,NVDA
    ```
@@ -282,7 +282,9 @@ The Python brain is split so you can add or change business rules without rewrit
 | **signals/** | **news_sentiment** = FinBERT/VADER on news. **composite** = News + Social (placeholder) + Momentum and consensus. |
 | **rules/** | **consensus** = allow buy only when enough sources positive. **daily_cap** = block new buys when daily PnL ≥ 0.2%. |
 | **strategy.py** | Orchestrates: applies rules (kill switch, daily cap, opening window, consensus, stop loss) and returns buy/sell/hold. |
-| **consumer.py** | Reads events, updates state, calls composite + strategy + executor. |
+| **apps/consumer.py** | Stdin entry: reads events, updates state, calls composite + strategy + executor. |
+| **apps/redis_consumer.py** | Redis entry: reads stream `market:updates` (test pipeline or second consumer). |
+| **apps/test_paper_order.py** | One-off: submit 1 paper BUY to verify Alpaca API. |
 | **executor.py** | Places orders on Alpaca; exposes `get_account_equity()` for daily cap. |
 
 **Adding a business rule:** Add a new module under `rules/` (e.g. `rules/max_drawdown.py`) that exports something like `is_rule_blocking_buy() -> bool`. In `strategy.decide()`, pass that into the existing “block buy” checks and add a new `Decision("hold", ..., "max_drawdown")` branch. No need to change signals or consumer.

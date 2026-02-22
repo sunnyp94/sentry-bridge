@@ -86,7 +86,7 @@ func (p *PriceStream) Run() error {
 		return err
 	}
 
-	slog.Info("stream connected", "url", url, "symbols", p.symbols)
+	slog.Info("price stream connected", "url", url, "symbols", p.symbols)
 
 	for {
 		_, data, err := conn.ReadMessage()

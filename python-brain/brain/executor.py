@@ -7,9 +7,9 @@ import logging
 import os
 from typing import Optional
 
-from strategy import Decision
+from .strategy import Decision
 
-log = logging.getLogger("executor")
+log = logging.getLogger("brain.executor")
 
 try:
     from alpaca.trading.client import TradingClient

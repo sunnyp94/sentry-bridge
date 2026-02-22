@@ -15,10 +15,10 @@ except ImportError:
     ZoneInfo = None
 
 import os
-import config
-from signals.news_sentiment import score_news  # noqa: I202
+from . import config
+from .signals.news_sentiment import score_news
 
-log = logging.getLogger("strategy")
+log = logging.getLogger("brain.strategy")
 
 # Per-symbol sentiment EMA (smooths composite score so one headline doesn't flip the decision).
 _sentiment_ema: Dict[str, float] = {}

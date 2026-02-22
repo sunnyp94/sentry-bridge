@@ -6,8 +6,8 @@ so a single sensational headline doesn't drive buys; if News is positive but Soc
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-import config
-from signals.news_sentiment import score_news  # noqa: I202
+from .. import config
+from .news_sentiment import score_news
 
 
 @dataclass

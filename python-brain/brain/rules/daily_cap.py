@@ -11,9 +11,9 @@ try:
 except ImportError:
     ZoneInfo = None
 
-import config
+from .. import config
 
-log = logging.getLogger("rules.daily_cap")
+log = logging.getLogger("brain.rules.daily_cap")
 
 _start_equity: Optional[float] = None
 _start_date_et: Optional[str] = None  # "YYYY-MM-DD" in ET

@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-Read events from the Redis stream (Go → Redis → this script).
-Use this to test the pipeline: Go writes to Redis, this script reads and logs.
-
-  REDIS_URL=redis://localhost:6379 REDIS_STREAM=market:updates python3 redis_consumer.py
-
-Requires: pip install redis. Logging: LOG_LEVEL (default INFO), same as brain (log_config).
+Redis consumer: reads events from the Redis stream (Go → Redis → this script).
+Use to test the pipeline or run a second consumer without stdin.
+  REDIS_URL=redis://localhost:6379 REDIS_STREAM=market:updates python3 apps/redis_consumer.py
+Run from python-brain root so brain package is found, or use PYTHONPATH.
 """
+import sys
+from pathlib import Path
+
+_root = Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
 import json
 import logging
 import os
-import sys
 from datetime import datetime
 
 log = logging.getLogger("redis_consumer")
@@ -34,7 +38,6 @@ def log_event(ev: dict) -> None:
     typ = ev.get("type", "?")
     ts = format_ts(ev.get("ts", ""))
     payload = ev.get("payload") or {}
-
     if typ == "news":
         symbols = ",".join(payload.get("symbols") or [])
         headline = (payload.get("headline") or "")[:80]
@@ -57,7 +60,7 @@ def log_event(ev: dict) -> None:
 
 def main() -> None:
     try:
-        from log_config import init as init_logging
+        from brain.log_config import init as init_logging
         init_logging()
     except ImportError:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -67,8 +70,7 @@ def main() -> None:
     log.info("Connecting to %s, stream=%s (BLOCK). Ctrl+C to stop.", url, stream)
 
     r = redis.from_url(url, decode_responses=True)
-    last_id = "$"  # only new messages
-
+    last_id = "$"
     while True:
         try:
             streams = r.xread(streams={stream: last_id}, block=5000, count=10)
@@ -80,11 +82,7 @@ def main() -> None:
         for sname, messages in streams:
             for msg_id, fields in messages:
                 last_id = msg_id
-                ev = {
-                    "type": fields.get("type", "?"),
-                    "ts": fields.get("ts", ""),
-                    "payload": {},
-                }
+                ev = {"type": fields.get("type", "?"), "ts": fields.get("ts", ""), "payload": {}}
                 payload_str = fields.get("payload")
                 if payload_str:
                     try:
