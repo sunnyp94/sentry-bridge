@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// TradingClient calls Alpaca Trading API (positions, orders).
+// TradingClient calls Alpaca Trading API (paper or live). Used for positions and open orders only; Python brain places buy/sell orders.
 type TradingClient struct {
 	baseURL    string
 	keyID      string

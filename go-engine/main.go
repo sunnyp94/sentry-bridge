@@ -1,10 +1,12 @@
+// Package main runs the Sentry Bridge engine: streams Alpaca market data (trades, quotes, news),
+// computes volatility, and pushes events to a Python brain (stdin pipe) and optionally Redis.
+// The Python brain decides buy/sell and places paper orders via Alpaca. Set STREAM=false for one-shot REST mode.
 package main
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,16 +19,45 @@ import (
 	"github.com/sunnyp94/sentry-bridge/go-engine/redis"
 )
 
+// initLogger configures slog from LOG_LEVEL (DEBUG/INFO/WARN/ERROR) and LOG_FORMAT (json or text).
+func initLogger() {
+	level := slog.LevelInfo
+	if s := os.Getenv("LOG_LEVEL"); s != "" {
+		switch strings.ToUpper(strings.TrimSpace(s)) {
+		case "DEBUG":
+			level = slog.LevelDebug
+		case "INFO":
+			level = slog.LevelInfo
+		case "WARN":
+			level = slog.LevelWarn
+		case "ERROR":
+			level = slog.LevelError
+		}
+	}
+	opts := &slog.HandlerOptions{Level: level}
+	var h slog.Handler
+	if strings.ToLower(strings.TrimSpace(os.Getenv("LOG_FORMAT"))) == "json" {
+		h = slog.NewJSONHandler(os.Stderr, opts)
+	} else {
+		h = slog.NewTextHandler(os.Stderr, opts)
+	}
+	slog.SetDefault(slog.New(h))
+}
+
 func main() {
+	initLogger()
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		slog.Error("config load failed", "err", err)
+		os.Exit(1)
 	}
 	if cfg.APIKeyID == "" || cfg.APISecretKey == "" {
-		log.Fatal("set APCA_API_KEY_ID and APCA_API_SECRET_KEY (e.g. in .env)")
+		slog.Error("missing credentials", "msg", "set APCA_API_KEY_ID and APCA_API_SECRET_KEY (e.g. in .env)")
+		os.Exit(1)
 	}
 	if len(cfg.Tickers) == 0 {
-		log.Fatal("set TICKERS (comma-separated, e.g. AAPL,TSLA,GOOGL)")
+		slog.Error("missing tickers", "msg", "set TICKERS (comma-separated, e.g. AAPL,TSLA,GOOGL)")
+		os.Exit(1)
 	}
 
 	if cfg.StreamingMode {
@@ -38,12 +69,7 @@ func main() {
 
 // runStreaming: WebSocket price + news, volatility refresh every 5 min; push all to Redis for Python brain.
 func runStreaming(cfg *config.Config) {
-	fmt.Println("Alpaca Market Data — streaming mode (high-frequency)")
-	fmt.Println("Data URL:", cfg.DataBaseURL)
-	fmt.Println("Stream URL:", cfg.StreamWSURL)
-	fmt.Println("Tickers:", strings.Join(cfg.Tickers, ", "))
-	fmt.Println("Price + News: real-time WebSocket | Volatility: refreshed every 5 min")
-	fmt.Println()
+	slog.Info("streaming mode", "data_url", cfg.DataBaseURL, "stream_url", cfg.StreamWSURL, "tickers", cfg.Tickers)
 
 	client := alpaca.NewClient(cfg.DataBaseURL, cfg.APIKeyID, cfg.APISecretKey)
 	tradingClient := alpaca.NewTradingClient(cfg.TradingBaseURL, cfg.APIKeyID, cfg.APISecretKey)
@@ -52,11 +78,11 @@ func runStreaming(cfg *config.Config) {
 	var brainPipe *brain.Pipe
 	if cfg.BrainCmd != "" {
 		if p, err := brain.StartPipe(cfg.BrainCmd); err != nil {
-			log.Printf("[brain] could not start %q: %v", cfg.BrainCmd, err)
+			slog.Error("brain pipe start failed", "cmd", cfg.BrainCmd, "err", err)
 		} else if p != nil {
 			brainPipe = p
 			defer brainPipe.Close()
-			fmt.Println("Brain: piping to", cfg.BrainCmd)
+			slog.Info("brain pipe started", "cmd", cfg.BrainCmd)
 		}
 	}
 
@@ -64,14 +90,13 @@ func runStreaming(cfg *config.Config) {
 	var pub redis.PublisherInterface = redis.NoopPublisher{}
 	if cfg.RedisURL != "" {
 		if p, err := redis.NewPublisher(cfg.RedisURL, cfg.RedisStream); err != nil {
-			log.Printf("[redis] not connected (%v)", err)
+			slog.Error("redis not connected", "err", err)
 		} else {
 			pub = p
 			defer p.Close()
-			fmt.Println("Redis stream:", cfg.RedisStream)
+			slog.Info("redis stream", "stream", cfg.RedisStream)
 		}
 	}
-	fmt.Println()
 
 	// Brain state: price/volume history for returns and volume_1m/5m
 	state := brain.NewState()
@@ -84,7 +109,7 @@ func runStreaming(cfg *config.Config) {
 	updateVolatility := func() {
 		barsResp, err := client.GetBars(cfg.Tickers, "1Day", 30)
 		if err != nil {
-			log.Printf("[vol] bars error: %v", err)
+			slog.Error("volatility bars error", "err", err)
 			return
 		}
 		volMu.Lock()
@@ -110,17 +135,13 @@ func runStreaming(cfg *config.Config) {
 				redis.LogErr(pub.PublishJSON(context.Background(), "volatility", payload), "volatility")
 			}
 		}
-		// Print snapshot
 		volMu.RLock()
-		fmt.Println("--- Volatility (30d annualized) ---")
 		for _, sym := range cfg.Tickers {
-			v := volatility[sym]
-			if v > 0 {
-				fmt.Printf("  %s: %.2f%%\n", sym, v*100)
+			if v := volatility[sym]; v > 0 {
+				slog.Info("volatility", "symbol", sym, "annualized_30d_pct", v*100)
 			}
 		}
 		volMu.RUnlock()
-		fmt.Println()
 	}
 	updateVolatility()
 
@@ -152,7 +173,7 @@ func runStreaming(cfg *config.Config) {
 		now := time.Now()
 		if now.Sub(lastPrint[symbol]) >= time.Second {
 			lastPrint[symbol] = now
-			fmt.Printf("[price] %s $%.2f (size %d) %s\n", symbol, price, size, t.Format("15:04:05"))
+			slog.Debug("price", "symbol", symbol, "price", price, "size", size, "at", t.Format("15:04:05"))
 		}
 		printMu.Unlock()
 	}
@@ -183,7 +204,7 @@ func runStreaming(cfg *config.Config) {
 		now := time.Now()
 		if now.Sub(lastPrint[symbol]) >= time.Second {
 			lastPrint[symbol] = now
-			fmt.Printf("[quote] %s bid=%.2f ask=%.2f mid=%.2f %s\n", symbol, bid, ask, mid, t.Format("15:04:05"))
+			slog.Debug("quote", "symbol", symbol, "bid", bid, "ask", ask, "mid", mid, "at", t.Format("15:04:05"))
 		}
 		printMu.Unlock()
 	}
@@ -208,8 +229,7 @@ func runStreaming(cfg *config.Config) {
 			_ = brainPipe.Send("news", payload)
 		}
 		redis.LogErr(pub.PublishJSON(context.Background(), "news", payload), "news")
-		fmt.Printf("[news] %s | %s\n", strings.Join(a.Symbols, ","), a.Headline)
-		fmt.Printf("       %s | %s\n", a.CreatedAt, a.Source)
+		slog.Info("news", "symbols", strings.Join(a.Symbols, ","), "headline", a.Headline, "created_at", a.CreatedAt, "source", a.Source)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -236,7 +256,7 @@ func runStreaming(cfg *config.Config) {
 		pushPositionsAndOrders := func() {
 			positions, err := tradingClient.GetPositions()
 			if err != nil {
-				log.Printf("[trading] positions: %v", err)
+				slog.Error("trading positions error", "err", err)
 				return
 			}
 			posPayload := make([]map[string]interface{}, 0, len(positions))
@@ -253,7 +273,7 @@ func runStreaming(cfg *config.Config) {
 			redis.LogErr(pub.Publish(context.Background(), redis.BrainEvent{Type: "positions", Payload: map[string]interface{}{"positions": posPayload}}), "positions")
 			orders, err := tradingClient.GetOpenOrders()
 			if err != nil {
-				log.Printf("[trading] orders: %v", err)
+				slog.Error("trading orders error", "err", err)
 				return
 			}
 			ordPayload := make([]map[string]interface{}, 0, len(orders))
@@ -284,13 +304,13 @@ func runStreaming(cfg *config.Config) {
 	go func() {
 		for {
 			if err := priceStream.Run(); err != nil {
-				log.Printf("[stream] price stream ended: %v", err)
+				slog.Error("price stream ended", "err", err)
 			}
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("[stream] reconnecting price stream in 5s...")
+				slog.Info("reconnecting price stream in 5s")
 				time.Sleep(5 * time.Second)
 			}
 		}
@@ -300,34 +320,25 @@ func runStreaming(cfg *config.Config) {
 	go func() {
 		for {
 			if err := newsStream.Run(); err != nil {
-				log.Printf("[stream] news stream ended: %v", err)
+				slog.Error("news stream ended", "err", err)
 			}
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("[stream] reconnecting news stream in 5s...")
+				slog.Info("reconnecting news stream in 5s")
 				time.Sleep(5 * time.Second)
 			}
 		}
 	}()
 
 	<-ctx.Done()
-	fmt.Println("\nStopping...")
+	slog.Info("stopping")
 }
 
 // runOneShot: single REST fetch and print (original behavior).
 func runOneShot(cfg *config.Config) {
-	fmt.Println("Alpaca Market Data (one-shot REST)")
-	fmt.Println("Data URL:", cfg.DataBaseURL)
-	fmt.Println("Tickers:", strings.Join(cfg.Tickers, ", "))
-	keyPreview := "not set"
-	if len(cfg.APIKeyID) >= 8 {
-		keyPreview = cfg.APIKeyID[:4] + "..." + cfg.APIKeyID[len(cfg.APIKeyID)-4:]
-	}
-	fmt.Println("Key ID:", keyPreview)
-	fmt.Println()
-
+	slog.Info("one-shot REST", "data_url", cfg.DataBaseURL, "tickers", cfg.Tickers)
 	client := alpaca.NewClient(cfg.DataBaseURL, cfg.APIKeyID, cfg.APISecretKey)
 
 	news, errNews := client.GetNews(cfg.Tickers, 50)
@@ -335,13 +346,13 @@ func runOneShot(cfg *config.Config) {
 	barsResp, errBars := client.GetBars(cfg.Tickers, "1Day", 30)
 
 	if errNews != nil {
-		log.Printf("news error: %v", errNews)
+		slog.Error("news fetch error", "err", errNews)
 	}
 	if errSnap != nil {
-		log.Printf("snapshots error: %v", errSnap)
+		slog.Error("snapshots fetch error", "err", errSnap)
 	}
 	if errBars != nil {
-		log.Printf("bars error: %v", errBars)
+		slog.Error("bars fetch error", "err", errBars)
 		os.Exit(1)
 	}
 
@@ -356,21 +367,14 @@ func runOneShot(cfg *config.Config) {
 	}
 
 	for _, sym := range cfg.Tickers {
-		fmt.Println("═══════════════════════════════════════════════════════════")
-		fmt.Printf("  %s\n", sym)
-		fmt.Println("═══════════════════════════════════════════════════════════")
-
 		articles := newsBySymbol[sym]
-		if len(articles) == 0 {
-			fmt.Println("  News: (none for this symbol in this batch)")
-		} else {
-			fmt.Printf("  News: %d article(s)\n", len(articles))
+		if len(articles) > 0 {
 			for _, a := range articles {
-				fmt.Printf("    • %s\n", a.Headline)
-				fmt.Printf("      %s | %s\n", a.CreatedAt, a.Source)
+				slog.Info("news", "symbol", sym, "headline", a.Headline, "created_at", a.CreatedAt, "source", a.Source)
 			}
+		} else {
+			slog.Debug("news", "symbol", sym, "count", 0)
 		}
-		fmt.Println()
 
 		s, ok := snapshots[sym]
 		price, priceSource := 0.0, ""
@@ -387,22 +391,19 @@ func runOneShot(cfg *config.Config) {
 			}
 		}
 		if price > 0 {
-			fmt.Printf("  Price: $%.2f  [%s]\n", price, priceSource)
+			slog.Info("price", "symbol", sym, "price", price, "source", priceSource)
 		} else {
-			fmt.Println("  Price: — (no data; US market closed weekends 9:30am–4pm ET)")
+			slog.Info("price", "symbol", sym, "msg", "no data (US market closed weekends 9:30am–4pm ET)")
 		}
-		fmt.Println()
 
 		bars, ok := barsResp.Bars[sym]
-		if !ok || len(bars) == 0 {
-			fmt.Println("  Volatility (30d annualized): — (no bar data)")
-		} else {
+		if ok && len(bars) > 0 {
 			vol := alpaca.AnnualizedVolatility(bars)
-			fmt.Printf("  Volatility (30d annualized): %.2f%%\n", vol*100)
+			slog.Info("volatility", "symbol", sym, "annualized_30d_pct", vol*100)
+		} else {
+			slog.Debug("volatility", "symbol", sym, "msg", "no bar data")
 		}
-		fmt.Println()
 	}
 
-	fmt.Println("═══════════════════════════════════════════════════════════")
-	fmt.Println("Done.")
+	slog.Info("one-shot done")
 }
