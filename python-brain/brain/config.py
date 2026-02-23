@@ -13,7 +13,8 @@ Quick reference (env name = default):
   Drawdown:     DRAWDOWN_HALT_ENABLED, MAX_DRAWDOWN_PCT
   Kill switch:  KILL_SWITCH_SENTIMENT_THRESHOLD, KILL_SWITCH_RETURN_THRESHOLD
   Stop loss:    STOP_LOSS_PCT
-  Opening:      NO_TRADE_FIRST_MINUTES_AFTER_OPEN
+  Session:      TRADING_START_ET (09:45), NO_NEW_BUYS_AFTER_ET (15:45), FLAT_BY_CLOSE_* (flat by 4pm ET)
+  Opening:      NO_TRADE_FIRST_MINUTES_AFTER_OPEN (legacy)
   Sentiment:    SENTIMENT_EMA_ALPHA
 """
 import os
@@ -96,6 +97,15 @@ KILL_SWITCH_RETURN_THRESHOLD = _float("KILL_SWITCH_RETURN_THRESHOLD", "-0.05")
 STOP_LOSS_PCT = _float("STOP_LOSS_PCT", "5.0")
 
 # -----------------------------------------------------------------------------
-# Opening window (no new buys in first N minutes after market open)
+# Session: trading starts 9:45am ET, flat by 4pm ET (no overnight)
 # -----------------------------------------------------------------------------
+# No new buys before this time ET (24h "HH:MM"). Default 09:45 = 9:45am ET.
+TRADING_START_ET = os.environ.get("TRADING_START_ET", "09:45").strip()
+# No new buys after this time ET; only closing. Default 15:45 = 3:45pm ET.
+NO_NEW_BUYS_AFTER_ET = os.environ.get("NO_NEW_BUYS_AFTER_ET", "15:45").strip()
+# Legacy: first N minutes after 9:30am open (ignored if TRADING_START_ET is set).
 NO_TRADE_FIRST_MINUTES_AFTER_OPEN = _int("NO_TRADE_FIRST_MINUTES_AFTER_OPEN", "15")
+
+# Flat by market close: from this time ET we close all positions so flat by 4pm. Default 15:50 = 3:50pm ET.
+FLAT_BY_CLOSE_ENABLED = _bool("FLAT_BY_CLOSE_ENABLED", "true")
+FLAT_BY_CLOSE_START_ET = os.environ.get("FLAT_BY_CLOSE_START_ET", "15:50").strip()

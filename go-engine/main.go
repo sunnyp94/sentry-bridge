@@ -265,9 +265,11 @@ func runStreaming(cfg *config.Config) {
 		}
 	}()
 
-	// Positions and open orders for the brain (every 30s)
+	// Positions and open orders for the brain (interval from config, default 30s)
+	slog.Info("positions/orders interval", "sec", cfg.PositionsIntervalSec)
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		interval := time.Duration(cfg.PositionsIntervalSec) * time.Second
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		pushPositionsAndOrders := func() {
 			t0 := time.Now()

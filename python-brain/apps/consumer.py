@@ -22,6 +22,11 @@ from typing import Optional
 
 _PERF = time.perf_counter
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
+
 from brain.strategy import (
     sentiment_score_from_news,
     update_and_get_sentiment_ema,
@@ -123,13 +128,13 @@ def _get_price(symbol: str) -> Optional[float]:
     return None
 
 
-def _try_place_order(d: Decision) -> bool:
-    """If decision is buy/sell with qty, respect cooldown, apply position sizing (buy), and place order. Returns True if placed."""
+def _try_place_order(d: Decision, skip_cooldown: bool = False) -> bool:
+    """If decision is buy/sell with qty, respect cooldown (unless skip_cooldown e.g. flat_by_close), apply position sizing (buy), and place order. Returns True if placed."""
     global _last_equity
     if d.action not in ("buy", "sell") or d.qty <= 0:
         return False
     now = time.time()
-    if now - last_order_time_by_symbol.get(d.symbol, 0) < ORDER_COOLDOWN_SEC:
+    if not skip_cooldown and (now - last_order_time_by_symbol.get(d.symbol, 0) < ORDER_COOLDOWN_SEC):
         log.warning("skip order (cooldown) symbol=%s", d.symbol)
         return False
     if os.environ.get("TRADE_PAPER", "true").lower() not in ("true", "1", "yes"):
@@ -178,6 +183,44 @@ def run_stop_loss_check() -> None:
         if d.action == "sell" and d.qty > 0:
             log.warning("stop_loss symbol=%s pl_pct=%.2f%% sell qty=%d reason=%s", d.symbol, pl_pct * 100, d.qty, d.reason)
             _try_place_order(d)
+
+
+def _is_in_flat_by_close_window() -> bool:
+    """True if we're in the closing window (weekday ET >= FLAT_BY_CLOSE_START_ET) so we should sell to be flat by 4pm."""
+    if not brain_config.FLAT_BY_CLOSE_ENABLED or not brain_config.FLAT_BY_CLOSE_START_ET or ZoneInfo is None:
+        return False
+    try:
+        et = datetime.now(ZoneInfo("America/New_York"))
+        if et.weekday() > 4:  # Saturday=5, Sunday=6
+            return False
+        parts = brain_config.FLAT_BY_CLOSE_START_ET.strip().split(":")
+        if len(parts) != 2:
+            return False
+        start_h = int(parts[0])
+        start_m = int(parts[1])
+        return (et.hour > start_h) or (et.hour == start_h and et.minute >= start_m)
+    except Exception:
+        return False
+
+
+def run_flat_by_close() -> None:
+    """If in closing window (e.g. from 3:50pm ET), close all positions (sell longs, buy to cover shorts) so we're flat by 4pm market close."""
+    if not _is_in_flat_by_close_window():
+        return
+    for sym, qty in list(positions_qty.items()):
+        try:
+            q = int(qty)
+        except (TypeError, ValueError):
+            continue
+        if q == 0:
+            continue
+        size = min(abs(q), brain_config.STRATEGY_MAX_QTY)
+        if q > 0:
+            d = Decision("sell", sym, size, "flat_by_close")
+        else:
+            d = Decision("buy", sym, size, "flat_by_close")
+        log.info("flat_by_close symbol=%s qty=%d (close by 4pm ET)", sym, d.qty)
+        _try_place_order(d, skip_cooldown=True)
 
 
 def run_strategy_on_news(payload: dict) -> None:
@@ -274,6 +317,7 @@ def handle_event(ev: dict) -> None:
             pass
         t1 = _PERF()
         run_stop_loss_check()
+        run_flat_by_close()
         stop_loss_ms = (_PERF() - t1) * 1000
         log.info("latency step=positions get_equity_ms=%.1f stop_loss_ms=%.1f", get_equity_ms, stop_loss_ms)
     elif typ == "news":

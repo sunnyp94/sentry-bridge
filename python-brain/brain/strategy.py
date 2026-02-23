@@ -71,7 +71,53 @@ def set_kill_switch(active: bool) -> None:
     _kill_switch_active = active
 
 
+def _parse_et_time(s: str) -> Optional[tuple]:
+    """Parse 'HH:MM' (24h) -> (hour, minute) or None."""
+    if not s or ":" not in s:
+        return None
+    parts = s.strip().split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except (TypeError, ValueError):
+        return None
+
+
+def is_before_trading_start() -> bool:
+    """True if before TRADING_START_ET (e.g. 09:45) on a weekday — no new buys."""
+    if not config.TRADING_START_ET or ZoneInfo is None:
+        return is_in_opening_no_trade_window()
+    start = _parse_et_time(config.TRADING_START_ET)
+    if start is None:
+        return is_in_opening_no_trade_window()
+    try:
+        et = datetime.now(ZoneInfo("America/New_York"))
+        if et.weekday() > 4:
+            return True
+        return (et.hour < start[0]) or (et.hour == start[0] and et.minute < start[1])
+    except Exception:
+        return False
+
+
+def is_after_no_new_buys() -> bool:
+    """True if at or after NO_NEW_BUYS_AFTER_ET (e.g. 15:45) on a weekday — no new buys, only closes."""
+    if not config.NO_NEW_BUYS_AFTER_ET or ZoneInfo is None:
+        return False
+    end = _parse_et_time(config.NO_NEW_BUYS_AFTER_ET)
+    if end is None:
+        return False
+    try:
+        et = datetime.now(ZoneInfo("America/New_York"))
+        if et.weekday() > 4:
+            return False
+        return (et.hour > end[0]) or (et.hour == end[0] and et.minute >= end[1])
+    except Exception:
+        return False
+
+
 def is_in_opening_no_trade_window() -> bool:
+    """True if in first NO_TRADE_FIRST_MINUTES_AFTER_OPEN after 9:30am ET (fallback when TRADING_START_ET not used)."""
     if config.NO_TRADE_FIRST_MINUTES_AFTER_OPEN <= 0 or ZoneInfo is None:
         return False
     try:
@@ -160,9 +206,12 @@ def decide(
     if drawdown_halt:
         return Decision("hold", symbol, 0, "drawdown_halt")
 
-    # Buy: opening window
-    if not have_position and is_in_opening_no_trade_window():
-        return Decision("hold", symbol, 0, "opening_15min_no_trade")
+    # Buy: before session start (e.g. before 9:45am ET)
+    if not have_position and is_before_trading_start():
+        return Decision("hold", symbol, 0, "before_trading_start")
+    # Buy: after no-new-buys time (e.g. after 3:45pm ET; only closes allowed)
+    if not have_position and is_after_no_new_buys():
+        return Decision("hold", symbol, 0, "after_no_new_buys")
 
     # Buy: consensus (e.g. 2 of 3 sources positive; if News positive but Social meh -> stay cash)
     if not consensus_ok:

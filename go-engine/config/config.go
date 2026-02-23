@@ -4,6 +4,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -38,23 +39,40 @@ func Load() (*Config, error) {
 	// Brain closest to data: Go pipes events to this process via stdin (NDJSON).
 	// e.g. "python3 python-brain/consumer.py" when run from project root.
 	brainCmd := os.Getenv("BRAIN_CMD")
+	positionsIntervalSec := envIntOrDefault("POSITIONS_INTERVAL_SEC", 15)
+	if positionsIntervalSec < 5 {
+		positionsIntervalSec = 5
+	}
+	if positionsIntervalSec > 300 {
+		positionsIntervalSec = 300
+	}
 	return &Config{
-		APIKeyID:       os.Getenv("APCA_API_KEY_ID"),
-		APISecretKey:   os.Getenv("APCA_API_SECRET_KEY"),
-		DataBaseURL:    baseURL,
-		StreamWSURL:    streamWSURL,
-		TradingBaseURL: tradingBaseURL,
-		Tickers:        tickers,
-		StreamingMode:  stream,
-		RedisURL:       redisURL,
-		RedisStream:    envOrDefault("REDIS_STREAM", "market:updates"),
-		BrainCmd:       brainCmd,
+		APIKeyID:             os.Getenv("APCA_API_KEY_ID"),
+		APISecretKey:         os.Getenv("APCA_API_SECRET_KEY"),
+		DataBaseURL:           baseURL,
+		StreamWSURL:          streamWSURL,
+		TradingBaseURL:        tradingBaseURL,
+		Tickers:               tickers,
+		StreamingMode:         stream,
+		RedisURL:              redisURL,
+		RedisStream:           envOrDefault("REDIS_STREAM", "market:updates"),
+		BrainCmd:              brainCmd,
+		PositionsIntervalSec:  positionsIntervalSec,
 	}, nil
 }
 
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func envIntOrDefault(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return def
 }
@@ -80,14 +98,15 @@ func parseTickers(s string) []string {
 
 // Config holds loaded env: Alpaca keys, data/trading/stream URLs, tickers, Redis, and brain command.
 type Config struct {
-	APIKeyID       string   // Alpaca API key (data + paper trading)
-	APISecretKey   string   // Alpaca secret
-	DataBaseURL    string   // e.g. https://data.alpaca.markets
-	StreamWSURL    string   // e.g. wss://stream.data.alpaca.markets
-	TradingBaseURL string   // e.g. https://paper-api.alpaca.markets (positions, orders)
-	Tickers        []string // Symbols to stream and send to brain
-	StreamingMode  bool     // true = WebSocket streaming; false = one-shot REST
-	RedisURL       string   // Optional Redis for replay/other consumers
-	RedisStream    string   // Stream name, default market:updates
-	BrainCmd       string   // Command to start Python brain, e.g. python3 python-brain/consumer.py
+	APIKeyID             string   // Alpaca API key (data + paper trading)
+	APISecretKey         string   // Alpaca secret
+	DataBaseURL          string   // e.g. https://data.alpaca.markets
+	StreamWSURL          string   // e.g. wss://stream.data.alpaca.markets
+	TradingBaseURL       string   // e.g. https://paper-api.alpaca.markets (positions, orders)
+	Tickers              []string // Symbols to stream and send to brain
+	StreamingMode        bool     // true = WebSocket streaming; false = one-shot REST
+	RedisURL             string   // Optional Redis for replay/other consumers
+	RedisStream          string   // Stream name, default market:updates
+	BrainCmd             string   // Command to start Python brain, e.g. python3 python-brain/consumer.py
+	PositionsIntervalSec int      // How often to fetch positions/orders (5–300s); default 15 (production-like)
 }
