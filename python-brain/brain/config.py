@@ -62,12 +62,12 @@ SENTIMENT_SELL_THRESHOLD = _float("SENTIMENT_SELL_THRESHOLD", "-0.32")  # reserv
 PROB_GAIN_SELL_THRESHOLD = _float("PROB_GAIN_SELL_THRESHOLD", "0.32")  # reserved
 
 # -----------------------------------------------------------------------------
-# Sizing and session (Pillar 1: Risk First)
+# Sizing and session — same for paper and live: 5% of equity per trade
 # -----------------------------------------------------------------------------
-STRATEGY_MAX_QTY = _int("STRATEGY_MAX_QTY", "12")  # risky: larger position per symbol
-# Position sizing: when RISK_PCT_PER_TRADE > 0, size by risk (qty = risk_amount / (ATR*mult)); else use POSITION_SIZE_PCT.
-RISK_PCT_PER_TRADE = _float("RISK_PCT_PER_TRADE", "4.0")  # 4% capital at risk per trade
-POSITION_SIZE_PCT = _float("POSITION_SIZE_PCT", "0.04")  # 4% of equity per position when risk sizing off
+STRATEGY_MAX_QTY = _int("STRATEGY_MAX_QTY", "12")
+# 0 = always use POSITION_SIZE_PCT (5%); >0 = use ATR risk sizing when ATR available (backtest)
+RISK_PCT_PER_TRADE = _float("RISK_PCT_PER_TRADE", "0")
+POSITION_SIZE_PCT = _float("POSITION_SIZE_PCT", "0.05")  # 5% of equity per position (paper and live)
 STRATEGY_REGULAR_SESSION_ONLY = _bool("STRATEGY_REGULAR_SESSION_ONLY", "true")
 ORDER_COOLDOWN_SEC = _int("ORDER_COOLDOWN_SEC", "30")  # seconds between orders per symbol (liberal: 30)
 STRATEGY_INTERVAL_SEC = _int("STRATEGY_INTERVAL_SEC", "45")  # run strategy (Green Light) for watchlist every N seconds (not news-only)

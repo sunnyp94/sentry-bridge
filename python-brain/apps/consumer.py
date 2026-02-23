@@ -221,19 +221,33 @@ def _parse_unrealized_plpc(raw) -> Optional[float]:
 
 
 def _get_price(symbol: str) -> Optional[float]:
-    """Last known price or mid for symbol (from trade/quote payload)."""
+    """Last known price or mid for symbol (from trade/quote payload or positions)."""
     p = last_payload_by_symbol.get(symbol, {})
-    price = p.get("price")
-    if price is not None and price > 0:
-        return float(price)
-    mid = p.get("mid")
-    if mid is not None and mid > 0:
-        return float(mid)
+    for key in ("price", "mid"):
+        v = p.get(key)
+        if v is None:
+            continue
+        try:
+            f = float(v)
+            if f > 0:
+                return f
+        except (TypeError, ValueError):
+            continue
+    # Fallback: position current price (e.g. for sells or when stream hasn't sent this symbol yet)
+    cp = position_current_price.get(symbol)
+    if cp is not None:
+        try:
+            f = float(cp)
+            if f > 0:
+                return f
+        except (TypeError, ValueError):
+            pass
     return None
 
 
-def _try_place_order(d: Decision, skip_cooldown: bool = False) -> bool:
-    """If decision is buy/sell with qty, respect cooldown (unless skip_cooldown e.g. daily_target_hit), apply position sizing (buy), and place order. Returns True if placed."""
+def _try_place_order(d: Decision, skip_cooldown: bool = False, price_override: Optional[float] = None) -> bool:
+    """If decision is buy/sell with qty, respect cooldown (unless skip_cooldown e.g. daily_target_hit), apply position sizing (buy), and place order. Returns True if placed.
+    price_override: when set (e.g. from strategy run), use for sizing and limit order so we get limit buys when we have a price."""
     global _last_equity
     if d.action not in ("buy", "sell") or d.qty <= 0:
         return False
@@ -244,7 +258,7 @@ def _try_place_order(d: Decision, skip_cooldown: bool = False) -> bool:
     if os.environ.get("TRADE_PAPER", "true").lower() not in ("true", "1", "yes"):
         return False
     from brain.executor import place_order, get_account_equity
-    price = _get_price(d.symbol)
+    price = price_override if price_override is not None and price_override > 0 else _get_price(d.symbol)
     # Pillar 1: position sizing — risk-based when RISK_PCT_PER_TRADE > 0 and ATR available, else POSITION_SIZE_PCT
     if d.action == "buy" and price and price > 0:
         equity = _last_equity
@@ -479,7 +493,7 @@ def run_strategy_for_symbols(symbols: list) -> None:
             "strategy symbol=%s technical=%.2f prob_gain=%.2f -> action=%s qty=%d reason=%s",
             d.symbol, tech or 0, prob, d.action, d.qty, d.reason,
         )
-        _try_place_order(d)
+        _try_place_order(d, price_override=cur_price)
     log.info("latency step=strategy_run symbols=%d ms=%.1f", len(symbols), (_PERF() - t0) * 1000)
 
 
