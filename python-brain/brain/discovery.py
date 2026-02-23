@@ -88,6 +88,7 @@ def run_discovery(
             lookback_days,
             chunk_size=getattr(brain_config, "SCREENER_CHUNK_SIZE", 100),
             delay_between_chunks_sec=getattr(brain_config, "SCREENER_CHUNK_DELAY_SEC", 0.5),
+            max_workers=getattr(brain_config, "SCREENER_PARALLEL_CHUNKS", 1),
         )
     else:
         bars_by_sym = get_bars(universe, lookback_days)

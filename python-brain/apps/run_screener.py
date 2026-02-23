@@ -53,13 +53,14 @@ def main() -> int:
     volume_spike_pct = args.vol_pct if args.vol_pct is not None else getattr(brain_config, "SCREENER_VOLUME_SPIKE_PCT", 15.0)
     chunk_size = getattr(brain_config, "SCREENER_CHUNK_SIZE", 100)
     chunk_delay = getattr(brain_config, "SCREENER_CHUNK_DELAY_SEC", 0.5)
+    parallel = getattr(brain_config, "SCREENER_PARALLEL_CHUNKS", 1)
     chunk_size = args.chunk_size if args.chunk_size is not None else chunk_size
     chunk_delay = args.chunk_delay if args.chunk_delay is not None else chunk_delay
 
     # Large universes: fetch bars in chunks to stay under Alpaca rate limits (e.g. 10k/min)
     if len(universe) > chunk_size:
-        print("Fetching bars for %d symbols in chunks of %d (delay %.1fs)..." % (len(universe), chunk_size, chunk_delay), file=sys.stderr)
-        bars_by_sym = get_bars_chunked(universe, days, chunk_size=chunk_size, delay_between_chunks_sec=chunk_delay)
+        print("Fetching bars for %d symbols in chunks of %d (parallel=%d)..." % (len(universe), chunk_size, parallel), file=sys.stderr)
+        bars_by_sym = get_bars_chunked(universe, days, chunk_size=chunk_size, delay_between_chunks_sec=chunk_delay, max_workers=parallel)
     else:
         bars_by_sym = get_bars(universe, days)
 

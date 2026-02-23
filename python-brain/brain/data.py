@@ -4,6 +4,7 @@ Shared data fetching (Alpaca bars, assets). Used by backtest and screener.
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -127,21 +128,40 @@ def get_bars_chunked(
     days: int,
     chunk_size: int = 100,
     delay_between_chunks_sec: float = 0.5,
+    max_workers: int = 1,
 ) -> Dict[str, pd.DataFrame]:
     """
-    Fetch daily bars for a large symbol list in chunks to avoid rate limits.
-    With 10k calls/min (Active Trader Pro), chunk_size=100 and ~0.5s delay
-    keeps you well under the limit.
+    Fetch daily bars for a large symbol list in chunks.
+    When max_workers > 1, fetches that many chunks in parallel (faster; stay under Alpaca rate limits).
+    When max_workers == 1, sequential with delay_between_chunks_sec between chunks.
     """
     n_chunks = (len(symbols) + chunk_size - 1) // chunk_size
-    _log.info("get_bars_chunked: %d symbols in %d chunks (chunk_size=%d)", len(symbols), n_chunks, chunk_size)
+    _log.info(
+        "get_bars_chunked: %d symbols in %d chunks (chunk_size=%d, max_workers=%d)",
+        len(symbols), n_chunks, chunk_size, max_workers,
+    )
     out: Dict[str, pd.DataFrame] = {}
-    for i in range(0, len(symbols), chunk_size):
-        chunk = symbols[i : i + chunk_size]
-        chunk_bars = get_bars(chunk, days)
-        out.update(chunk_bars)
-        if i + chunk_size < len(symbols) and delay_between_chunks_sec > 0:
-            time.sleep(delay_between_chunks_sec)
+
+    if max_workers is None or max_workers < 1:
+        max_workers = 1
+    if max_workers == 1:
+        for i in range(0, len(symbols), chunk_size):
+            chunk = symbols[i : i + chunk_size]
+            chunk_bars = get_bars(chunk, days)
+            out.update(chunk_bars)
+            if i + chunk_size < len(symbols) and delay_between_chunks_sec > 0:
+                time.sleep(delay_between_chunks_sec)
+    else:
+        chunks = [symbols[i : i + chunk_size] for i in range(0, len(symbols), chunk_size)]
+        workers = min(max_workers, len(chunks))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(get_bars, chunk, days): chunk for chunk in chunks}
+            for future in as_completed(futures):
+                try:
+                    chunk_bars = future.result()
+                    out.update(chunk_bars)
+                except Exception as e:
+                    _log.warning("get_bars_chunked: chunk failed: %s", e)
     _log.info("get_bars_chunked: got bars for %d symbols", len(out))
     return out
 

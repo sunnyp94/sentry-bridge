@@ -226,7 +226,8 @@ SCREENER_UNIVERSE = os.environ.get("SCREENER_UNIVERSE", "r2000_sp500_nasdaq100")
 # Need 21+ trading days for Z/vol (20d). 35 calendar days ~= 25 trading days.
 SCREENER_LOOKBACK_DAYS = _int("SCREENER_LOOKBACK_DAYS", "35")  # bars for Z and 20d vol avg
 SCREENER_CHUNK_SIZE = _int("SCREENER_CHUNK_SIZE", "100")  # bar fetch chunk size for large universes
-SCREENER_CHUNK_DELAY_SEC = _float("SCREENER_CHUNK_DELAY_SEC", "0.5")  # delay between chunks (rate limit)
+SCREENER_CHUNK_DELAY_SEC = _float("SCREENER_CHUNK_DELAY_SEC", "0.5")  # delay between chunks (rate limit, sequential only)
+SCREENER_PARALLEL_CHUNKS = _int("SCREENER_PARALLEL_CHUNKS", "4")  # fetch this many chunks in parallel (1 = sequential; 4–8 faster, stay under rate limits)
 # Where screener writes today's active symbols (file path). Consumer reads this when OPPORTUNITY_ENGINE_ENABLED.
 ACTIVE_SYMBOLS_FILE = os.environ.get("ACTIVE_SYMBOLS_FILE", "").strip()  # e.g. data/active_symbols.txt
 # When set, run scanner daily at this time ET on full trading days (e.g. 09:30 = market open). Also runs at container start.
