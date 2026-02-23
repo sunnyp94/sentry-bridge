@@ -97,16 +97,16 @@ func (c *TradingClient) GetPositions() ([]Position, error) {
 
 // Order is a single order from GET /v2/orders.
 type Order struct {
-	ID        string  `json:"id"`
-	Symbol    string  `json:"symbol"`
-	Side      string  `json:"side"`
-	Qty       string  `json:"qty"`
-	FilledQty string  `json:"filled_qty"`
-	Type      string  `json:"type"`
-	Status    string  `json:"status"`
-	LimitPrice *float64 `json:"limit_price,omitempty"`
-	StopPrice  *float64 `json:"stop_price,omitempty"`
-	CreatedAt string  `json:"created_at"`
+	ID         string    `json:"id"`
+	Symbol     string    `json:"symbol"`
+	Side       string    `json:"side"`
+	Qty        string    `json:"qty"`
+	FilledQty  string    `json:"filled_qty"`
+	Type       string    `json:"type"`
+	Status     string    `json:"status"`
+	LimitPrice *flexFloat `json:"limit_price,omitempty"` // Alpaca may return string or number
+	StopPrice  *flexFloat `json:"stop_price,omitempty"`
+	CreatedAt  string    `json:"created_at"`
 }
 
 // GetOpenOrders returns orders with status=open.

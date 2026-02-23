@@ -80,12 +80,14 @@ def main() -> int:
                 print(s)
         return 0
 
+    min_vol = getattr(brain_config, "SCREENER_MIN_VOLUME", 2000000)
     scored = score_universe(
         bars_by_sym,
         z_threshold=z_threshold,
         volume_spike_pct=volume_spike_pct,
         volume_avg_days=20,
         top_n=top_n,
+        min_volume=min_vol,
     )
     active = [s for s, _ in scored]
 

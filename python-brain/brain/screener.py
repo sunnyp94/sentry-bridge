@@ -108,12 +108,14 @@ def score_universe(
     top_n: int = 5,
     z_period: int = 20,
     ofi_by_sym: Optional[Dict[str, float]] = None,
+    min_volume: int = 0,
 ) -> List[Tuple[str, Dict[str, Any]]]:
     """
     Score each symbol by:
     1. |Z-score| > z_threshold (extreme move)
     2. Volume spike: latest volume >= (1 + volume_spike_pct/100) * 20-day avg volume
     3. Optional: OFI skew (when ofi_by_sym provided) — rank by |OFI|
+    4. min_volume: exclude symbols with avg or latest daily volume below this (focus on high-volume movers).
 
     Returns list of (symbol, info_dict) sorted by composite score (best first), length <= top_n.
     info_dict has: z_score, vol_ratio, ofi (if provided), score, reason.
@@ -136,14 +138,18 @@ def score_universe(
         if use_z_period < 2 or use_vol_days < 2:
             continue
 
+        # Volume: require high liquidity so we only focus on names that move (exclude e.g. <2k/day)
+        use_vols = vols[-use_vol_days:] if len(vols) >= use_vol_days else vols
+        avg_vol = float(np.mean(use_vols)) if use_vols else 1.0
+        latest_vol = float(vols[-1]) if vols else 0.0
+        if min_volume > 0 and (avg_vol < min_volume or latest_vol < min_volume):
+            continue
+
         # Z-score of returns (latest bar)
         z_series, last_z = returns_zscore_from_prices(closes, period=use_z_period)
         z_score = float(last_z) if last_z is not None else 0.0
 
         # Volume ratio: latest / avg(last volume_avg_days)
-        use_vols = vols[-use_vol_days:] if len(vols) >= use_vol_days else vols
-        avg_vol = float(np.mean(use_vols)) if use_vols else 1.0
-        latest_vol = float(vols[-1]) if vols else 0.0
         vol_ratio = (latest_vol / avg_vol) if avg_vol > 0 else 0.0
 
         # Qualify: |Z| >= z_threshold OR volume spike
@@ -187,9 +193,11 @@ def run_screener(
     volume_spike_pct: float = 15.0,
     volume_avg_days: int = 20,
     ofi_by_sym: Optional[Dict[str, float]] = None,
+    min_volume: int = 0,
 ) -> List[str]:
     """
     Run the screener on pre-fetched bars. Returns list of active symbols (top N opportunities).
+    min_volume: exclude symbols with avg or latest daily volume below this (high-volume movers only).
     """
     scored = score_universe(
         bars_by_sym,
@@ -198,5 +206,6 @@ def run_screener(
         volume_avg_days=volume_avg_days,
         top_n=top_n,
         ofi_by_sym=ofi_by_sym,
+        min_volume=min_volume,
     )
     return [s for s, _ in scored]

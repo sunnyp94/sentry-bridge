@@ -332,7 +332,7 @@ def run_stop_loss_check() -> None:
             cur_price = float(cur_price) if cur_price is not None else None
         except (TypeError, ValueError):
             cur_price = None
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=True, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=None)
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=None)
         if d.action == "sell" and d.qty > 0:
             if d.reason == "scale_out_50_at_vwap":
                 _scaled_50_at_vwap.add(sym)
@@ -472,7 +472,7 @@ def run_strategy_for_symbols(symbols: list) -> None:
             cur_price = None
         _structure_ok = _trend_ok(sym)
         _ltf_prices = list(price_history_by_symbol.get(sym, []))
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=True, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=tech, structure_ok=_structure_ok, ltf_prices=_ltf_prices)
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=tech, structure_ok=_structure_ok, ltf_prices=_ltf_prices)
         if d.reason == "scale_out_50_at_vwap":
             _scaled_50_at_vwap.add(sym)
         log.info(

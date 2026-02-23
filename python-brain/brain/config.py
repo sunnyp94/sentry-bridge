@@ -1,23 +1,9 @@
 """
 Central config: all strategy parameters. Change defaults below or set env (e.g. in .env).
 
-Env override: any name below can be set in the environment (e.g. SENTIMENT_BUY_THRESHOLD=0.22).
-
-Quick reference (env name = default):
-  Daily cap:    DAILY_CAP_ENABLED, DAILY_CAP_PCT, DAILY_LOSS_CAP_PCT
-  Buy:          SENTIMENT_BUY_THRESHOLD, SENTIMENT_BUY_MIN_CONFIDENCE, PROB_GAIN_THRESHOLD
-  Sell:         EXIT_ONLY_STOP_AND_TP, SENTIMENT_SELL_THRESHOLD, PROB_GAIN_SELL_THRESHOLD
-  Sizing:       STRATEGY_MAX_QTY, POSITION_SIZE_PCT, STRATEGY_REGULAR_SESSION_ONLY
-  Limit orders: USE_LIMIT_ORDERS, LIMIT_ORDER_OFFSET_BPS
-  Drawdown:     DRAWDOWN_HALT_ENABLED, MAX_DRAWDOWN_PCT
-  Kill switch:  KILL_SWITCH_SENTIMENT_THRESHOLD, KILL_SWITCH_RETURN_THRESHOLD
-  Stop loss:    STOP_LOSS_PCT, TAKE_PROFIT_PCT (0=off)
-  Robustness:   VOL_MAX_FOR_ENTRY, BREAKEVEN_ACTIVATION_PCT, TRAILING_STOP_*, MAX_HOLD_DAYS
-  Microstructure: USE_ATR_STOP, ATR_PERIOD, ATR_STOP_MULTIPLE | VWAP_* | ZSCORE_* (pro-style indicators)
-  Session:      NO_NEW_BUYS_AFTER_ET (15:45)
-  Technical:    RSI + MACD + 3 patterns (USE_TECHNICAL_INDICATORS, PATTERN_LOOKBACK); Green Light uses technical only
-  Trend:        TREND_FILTER_ENABLED, TREND_SMA_PERIOD (only long when price > SMA)
-  Sentiment:    SENTIMENT_EMA_ALPHA
+Current strategy: Green Light only (4-point checklist + prob_gain). Entry/exit use keys referenced
+in brain/strategy.py. Keys marked (reserved) are defined for env compatibility but not read by the
+current strategy — use them when adding plug-in rules (e.g. sentiment entry, VWAP/Z-score filters).
 """
 import os
 
@@ -61,21 +47,19 @@ DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT = _float("DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT"
 FLAT_WHEN_DAILY_TARGET_HIT = _bool("FLAT_WHEN_DAILY_TARGET_HIT", "false")
 
 # -----------------------------------------------------------------------------
-# Buy thresholds (stricter = fewer, higher-quality mean-reversion entries)
+# Buy thresholds — Green Light uses PROB_GAIN_THRESHOLD only; others reserved for plug-in rules
 # -----------------------------------------------------------------------------
-SENTIMENT_EMA_ALPHA = _float("SENTIMENT_EMA_ALPHA", "0.35")
-# Balanced: enough entries for mean reversion, not noise (liberal: lower = more trades)
-SENTIMENT_BUY_THRESHOLD = _float("SENTIMENT_BUY_THRESHOLD", "0.10")
-SENTIMENT_BUY_MIN_CONFIDENCE = _float("SENTIMENT_BUY_MIN_CONFIDENCE", "0.18")
+SENTIMENT_EMA_ALPHA = _float("SENTIMENT_EMA_ALPHA", "0.35")  # used (sentiment EMA)
+SENTIMENT_BUY_THRESHOLD = _float("SENTIMENT_BUY_THRESHOLD", "0.10")  # reserved
+SENTIMENT_BUY_MIN_CONFIDENCE = _float("SENTIMENT_BUY_MIN_CONFIDENCE", "0.18")  # reserved
 PROB_GAIN_THRESHOLD = _float("PROB_GAIN_THRESHOLD", "0.12")  # scalp: very low bar for entry
 
 # -----------------------------------------------------------------------------
-# Sell thresholds (hold through noise — exit only on clear failure or take-profit/stop)
-# EXIT_ONLY_STOP_AND_TP: when true, only exit on stop-loss or take-profit (no sentiment/prob exit)
+# Sell thresholds — current exits are stop/TP/VWAP/trailing only; below reserved for plug-in
 # -----------------------------------------------------------------------------
-EXIT_ONLY_STOP_AND_TP = _bool("EXIT_ONLY_STOP_AND_TP", "true")  # force R:R; no whipsaw exit
-SENTIMENT_SELL_THRESHOLD = _float("SENTIMENT_SELL_THRESHOLD", "-0.32")
-PROB_GAIN_SELL_THRESHOLD = _float("PROB_GAIN_SELL_THRESHOLD", "0.32")
+EXIT_ONLY_STOP_AND_TP = _bool("EXIT_ONLY_STOP_AND_TP", "true")  # reserved (doc only)
+SENTIMENT_SELL_THRESHOLD = _float("SENTIMENT_SELL_THRESHOLD", "-0.32")  # reserved
+PROB_GAIN_SELL_THRESHOLD = _float("PROB_GAIN_SELL_THRESHOLD", "0.32")  # reserved
 
 # -----------------------------------------------------------------------------
 # Sizing and session (Pillar 1: Risk First)
@@ -135,10 +119,8 @@ REGIME_VOLATILITY_PCT = _float("REGIME_VOLATILITY_PCT", "70")  # above this perc
 # Global filter: SPY 200-day MA (when SPY < 200 MA: more cautious on longs, more aggressive on shorts when added)
 # -----------------------------------------------------------------------------
 SPY_200MA_REGIME_ENABLED = _bool("SPY_200MA_REGIME_ENABLED", "false")
-# When SPY below 200 MA: require stricter Z for long entry (e.g. -2.8 instead of -2.5)
-SPY_BELOW_200MA_Z_TIGHTEN = _float("SPY_BELOW_200MA_Z_TIGHTEN", "-2.8")
-# When SPY below 200 MA: multiply long position size by this (e.g. 0.5 = half size)
-SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER = _float("SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER", "0.5")
+SPY_BELOW_200MA_Z_TIGHTEN = _float("SPY_BELOW_200MA_Z_TIGHTEN", "-2.8")  # reserved
+SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER = _float("SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER", "0.5")  # used for sizing
 
 # -----------------------------------------------------------------------------
 # Kill switch (no new buys when very bad news or sharp negative returns)
@@ -147,10 +129,10 @@ KILL_SWITCH_SENTIMENT_THRESHOLD = _float("KILL_SWITCH_SENTIMENT_THRESHOLD", "-0.
 KILL_SWITCH_RETURN_THRESHOLD = _float("KILL_SWITCH_RETURN_THRESHOLD", "-0.05")
 
 # -----------------------------------------------------------------------------
-# Stop loss and take profit — tight for "profit daily and stop" (lock small gains)
+# Stop loss and take profit — close in profit at sensible level; cut losers at 1%
 # -----------------------------------------------------------------------------
 STOP_LOSS_PCT = _float("STOP_LOSS_PCT", "1.0")
-TAKE_PROFIT_PCT = _float("TAKE_PROFIT_PCT", "5.0")  # 5% fixed TP when VWAP far; primary target = VWAP
+TAKE_PROFIT_PCT = _float("TAKE_PROFIT_PCT", "2.0")  # close full position when up 2% (scalp)
 
 # -----------------------------------------------------------------------------
 # Robustness (improve forward-looking edge, not just backtest fit)
@@ -162,48 +144,42 @@ BREAKEVEN_ACTIVATION_PCT = _float("BREAKEVEN_ACTIVATION_PCT", "1.0")  # 0 = disa
 # Trailing stop: once up 2%, sell if we drop 1% from peak
 TRAILING_STOP_ACTIVATION_PCT = _float("TRAILING_STOP_ACTIVATION_PCT", "2.0")  # 0 = disabled
 TRAILING_STOP_PCT = _float("TRAILING_STOP_PCT", "1.0")
-# Scale out: lock 25% at 1%, 2%, 3%; false = let full position run to VWAP/TP (better in backtest)
-SCALE_OUT_ENABLED = _bool("SCALE_OUT_ENABLED", "false")
+# Scale out: lock 25% at 1%, 2%, 3% so we close in profit at sensible levels
+SCALE_OUT_ENABLED = _bool("SCALE_OUT_ENABLED", "true")
 SCALE_OUT_LEVELS_PCT = os.environ.get("SCALE_OUT_LEVELS_PCT", "1,2,3")  # comma-separated % (e.g. 1,2,3)
 SCALE_OUT_PCT_PER_LEVEL = _float("SCALE_OUT_PCT_PER_LEVEL", "25")  # sell this % of position at each level
 # Time stop: exit if held this many days and not at TP (avoid dead capital); 0 = disabled
 MAX_HOLD_DAYS = _int("MAX_HOLD_DAYS", "10")
 
 # -----------------------------------------------------------------------------
-# Microstructure / volatility (pro-style: VWAP anchor, ATR stops, z-score mean reversion)
+# Microstructure / volatility — ATR used for stop/TP; VWAP/Z/ATR-percentile (reserved) for plug-in
 # -----------------------------------------------------------------------------
-# ATR-based stop: 20-period ATR, 2.0× below entry (anti-shakeout); never use fixed % for stop
 USE_ATR_STOP = _bool("USE_ATR_STOP", "true")
-ATR_PERIOD = _int("ATR_PERIOD", "20")  # spec: 20-period ATR
-ATR_STOP_MULTIPLE = _float("ATR_STOP_MULTIPLE", "2.0")  # 2× ATR below entry (realistic; 1.5 = tighter)
-# VWAP = Fair Value anchor: only long when price significantly below VWAP; exit target = return to VWAP
+ATR_PERIOD = _int("ATR_PERIOD", "20")
+ATR_STOP_MULTIPLE = _float("ATR_STOP_MULTIPLE", "2.0")  # 2× ATR below entry
+VWAP_LOOKBACK = _int("VWAP_LOOKBACK", "20")  # used by backtest/screener for VWAP distance
+# Reserved (use when adding VWAP/Z/ATR-percentile entry rules):
 USE_VWAP_ANCHOR = _bool("USE_VWAP_ANCHOR", "true")
-VWAP_LONG_ONLY_BELOW = _bool("VWAP_LONG_ONLY_BELOW", "true")  # do not enter at VWAP; only oversold stretch below
-VWAP_FAIR_VALUE_BAND_STD = _float("VWAP_FAIR_VALUE_BAND_STD", "1.0")  # ±1 std dev band around VWAP (for deviation logic)
-VWAP_MEAN_REVERSION_PCT = _float("VWAP_MEAN_REVERSION_PCT", "2.0")  # above VWAP by this % = extended, no buy
-VWAP_LOOKBACK = _int("VWAP_LOOKBACK", "20")  # rolling VWAP window (0 = expanding)
-# Z-Score: Z=(x−μ)/σ. Trigger at -3.0 (extreme oversold) or -2.5 for entry
+VWAP_LONG_ONLY_BELOW = _bool("VWAP_LONG_ONLY_BELOW", "true")
+VWAP_FAIR_VALUE_BAND_STD = _float("VWAP_FAIR_VALUE_BAND_STD", "1.0")
+VWAP_MEAN_REVERSION_PCT = _float("VWAP_MEAN_REVERSION_PCT", "2.0")
 USE_ZSCORE_MEAN_REVERSION = _bool("USE_ZSCORE_MEAN_REVERSION", "true")
-ZSCORE_MEAN_REVERSION_BUY = _float("ZSCORE_MEAN_REVERSION_BUY", "-2.0")  # z <= this → boost sentiment
-ZSCORE_TRIGGER_ENTRY = _float("ZSCORE_TRIGGER_ENTRY", "-2.0")  # when MICROSTRUCTURE_ENTRY_MODE: require Z <= this for buy
+ZSCORE_MEAN_REVERSION_BUY = _float("ZSCORE_MEAN_REVERSION_BUY", "-2.0")
+ZSCORE_TRIGGER_ENTRY = _float("ZSCORE_TRIGGER_ENTRY", "-2.0")
 ZSCORE_PERIOD = _int("ZSCORE_PERIOD", "20")
-# ATR tradable band: only trade when ATR is within this percentile range (avoid extreme vol)
-ATR_PERCENTILE_MIN = _float("ATR_PERCENTILE_MIN", "10")   # min percentile (e.g. 10 = not too quiet)
-ATR_PERCENTILE_MAX = _float("ATR_PERCENTILE_MAX", "90")  # max percentile (e.g. 90 = not extreme spike)
-ATR_PERCENTILE_LOOKBACK = _int("ATR_PERCENTILE_LOOKBACK", "60")  # bars for percentile calc
-# OFI: require surge in aggressive buying for entry (absorption → breakout)
+ATR_PERCENTILE_MIN = _float("ATR_PERCENTILE_MIN", "10")
+ATR_PERCENTILE_MAX = _float("ATR_PERCENTILE_MAX", "90")
+ATR_PERCENTILE_LOOKBACK = _int("ATR_PERCENTILE_LOOKBACK", "60")
+MICROSTRUCTURE_ENTRY_MODE = _bool("MICROSTRUCTURE_ENTRY_MODE", "false")
+# OFI (used by Green Light)
 USE_OFI = _bool("USE_OFI", "true")
 OFI_SURGE_FOR_ENTRY = _float("OFI_SURGE_FOR_ENTRY", "0.0")  # scalp: any OFI or no data = pass
-OFI_WINDOW_TRADES = _int("OFI_WINDOW_TRADES", "100")  # rolling window (last N trades per symbol)
-# Exit: primary profit target = return to Daily VWAP (mean reversion)
-TAKE_PROFIT_AT_VWAP = _bool("TAKE_PROFIT_AT_VWAP", "true")  # sell when price >= VWAP (primary target)
-# Let winners run: at 50% of way to VWAP move stop to breakeven; above VWAP use trailing ATR stop
-BREAKEVEN_AT_HALFWAY_TO_VWAP = _bool("BREAKEVEN_AT_HALFWAY_TO_VWAP", "true")  # when price 50% toward VWAP, lock breakeven
-TRAILING_ATR_ABOVE_VWAP = _bool("TRAILING_ATR_ABOVE_VWAP", "true")  # above VWAP: trailing stop at TRAILING_ATR_MULTIPLE×ATR below peak
-TRAILING_ATR_MULTIPLE = _float("TRAILING_ATR_MULTIPLE", "1.5")  # e.g. 1.5× ATR trailing when price > VWAP
-# When true, entry requires filter (price below VWAP, ATR tradable) AND trigger (Z <= ZSCORE_TRIGGER_ENTRY, OFI >= surge)
-# When true, require Z <= ZSCORE_TRIGGER_ENTRY for every buy (on daily bars this yields very few trades; use -1.5 or live tape)
-MICROSTRUCTURE_ENTRY_MODE = _bool("MICROSTRUCTURE_ENTRY_MODE", "false")
+OFI_WINDOW_TRADES = _int("OFI_WINDOW_TRADES", "100")
+# Exit: VWAP/breakeven/trailing (used when consumer passes vwap_distance_pct, atr_stop_pct, etc.)
+TAKE_PROFIT_AT_VWAP = _bool("TAKE_PROFIT_AT_VWAP", "true")
+BREAKEVEN_AT_HALFWAY_TO_VWAP = _bool("BREAKEVEN_AT_HALFWAY_TO_VWAP", "true")
+TRAILING_ATR_ABOVE_VWAP = _bool("TRAILING_ATR_ABOVE_VWAP", "true")
+TRAILING_ATR_MULTIPLE = _float("TRAILING_ATR_MULTIPLE", "1.5")
 
 # -----------------------------------------------------------------------------
 # Green Light: scalp = loose checklist, mini gains (low R-multiple TP).
@@ -226,6 +202,8 @@ OPPORTUNITY_ENGINE_ENABLED = _bool("OPPORTUNITY_ENGINE_ENABLED", "false")
 SCREENER_TOP_N = _int("SCREENER_TOP_N", "5")
 SCREENER_Z_THRESHOLD = _float("SCREENER_Z_THRESHOLD", "1.2")  # |Z| >= this = candidate (lower = more anomalies; was 2.0)
 SCREENER_VOLUME_SPIKE_PCT = _float("SCREENER_VOLUME_SPIKE_PCT", "10")  # 10% vs 20d avg (lower = more qualify)
+# Focus on liquid movers: require avg and latest daily volume >= this. 2M–5M+ shares/day = mid-cap growth, popular tech.
+SCREENER_MIN_VOLUME = _int("SCREENER_MIN_VOLUME", "2000000")
 SCREENER_UNIVERSE = os.environ.get("SCREENER_UNIVERSE", "r2000_sp500_nasdaq100")  # r2000_sp500_nasdaq100 | lab_12 | russell2000 | sp500 | sp400 | nasdaq100 | env | alpaca_equity_500 | file:path
 # Need 21+ trading days for Z/vol (20d). 35 calendar days ~= 25 trading days.
 SCREENER_LOOKBACK_DAYS = _int("SCREENER_LOOKBACK_DAYS", "35")  # bars for Z and 20d vol avg
@@ -245,8 +223,8 @@ DISCOVERY_START_ET = os.environ.get("DISCOVERY_START_ET", "08:00").strip()
 DISCOVERY_END_ET = os.environ.get("DISCOVERY_END_ET", "09:30").strip()
 DISCOVERY_INTERVAL_MIN = _int("DISCOVERY_INTERVAL_MIN", "5")
 DISCOVERY_TOP_N = _int("DISCOVERY_TOP_N", "10")
-TWO_STAGE_ENTRY_ATR_BELOW_VWAP = _float("TWO_STAGE_ENTRY_ATR_BELOW_VWAP", "1.0")
-SCALE_OUT_50_AT_VWAP = _bool("SCALE_OUT_50_AT_VWAP", "true")
+TWO_STAGE_ENTRY_ATR_BELOW_VWAP = _float("TWO_STAGE_ENTRY_ATR_BELOW_VWAP", "1.0")  # reserved
+SCALE_OUT_50_AT_VWAP = _bool("SCALE_OUT_50_AT_VWAP", "true")  # used in decide() when vwap_distance_pct passed
 PORTFOLIO_HEALTH_CHECK_ET = os.environ.get("PORTFOLIO_HEALTH_CHECK_ET", "16:00").strip()
 
 # -----------------------------------------------------------------------------

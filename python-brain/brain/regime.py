@@ -57,13 +57,3 @@ def get_regime(
     if abs(c[-1] - sma) / sma < 0.02 and abs(momentum) < 0.01:
         return "mean_reversion"
     return "neutral"
-
-
-def regime_allows_mean_reversion(regime: RegimeType) -> bool:
-    """True when mean-reversion entries are allowed (choppy or neutral)."""
-    return regime in ("mean_reversion", "neutral")
-
-
-def regime_allows_trend(regime: RegimeType) -> bool:
-    """True when trend-following entries are allowed (trend or neutral)."""
-    return regime in ("trend", "neutral")
