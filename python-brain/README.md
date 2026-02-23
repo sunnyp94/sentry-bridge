@@ -53,7 +53,7 @@ python-brain/
   ```
 
 - **Stock scanner (daily opportunity pool):** Don’t hard-code a static list—screen the universe each day and activate only the top 3–5 names. Run every morning (e.g. cron at 8am ET); writes active symbols to a file the consumer reads.
-  - **Universe:** Start with the 12-ticker “lab” (`lab_12`) or `env` (TICKERS). Later: Russell 2000 or top 500 liquid.
+  - **Universe:** Start with `lab_12`, `sp400`, `nasdaq100`, or `file:path/to/symbols.txt`. Scanner runs at container start and 8am ET on full market days.
   - **Criteria:** |Z-score| > 2.0 (extreme move), or 15% volume spike vs 20-day average; optional OFI skew when available.
   - **Deploy:** Bot only runs strategy for symbols in the active list when `OPPORTUNITY_ENGINE_ENABLED=true` and `ACTIVE_SYMBOLS_FILE` is set.
   ```bash

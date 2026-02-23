@@ -27,8 +27,7 @@ Go engine that pulls **market news**, **price**, and **volatility** from Alpaca 
 
    Optional:
 
-   - `TICKERS` – comma-separated symbols (fallback when not using the scanner)  
-   - **Daily opportunity pool:** Set `SCREENER_UNIVERSE` (e.g. `lab_12`, `sp400`, `nasdaq100`), `ACTIVE_SYMBOLS_FILE=data/active_symbols.txt`, and `OPPORTUNITY_ENGINE_ENABLED=true`; the scanner runs automatically before the trading day (no static stock list needed).  
+   - **Tickers:** Come only from the scanner. Set `ACTIVE_SYMBOLS_FILE`, `OPPORTUNITY_ENGINE_ENABLED=true`, and `SCREENER_UNIVERSE` (e.g. `lab_12`, `sp400`, `nasdaq100`). Scanner runs at container start and 8am ET on full market days.  
    - `ALPACA_DATA_BASE_URL` – REST data API (default `https://data.alpaca.markets`)  
    - `STREAM` – set to `false` or `0` for one-shot REST only; default is streaming mode  
    - `REDIS_URL` – Redis address for Python brain (e.g. `redis://localhost:6379`); if unset, events are not published  
@@ -43,7 +42,7 @@ One command runs the full stack (Go + Redis + Python brain) the same way locally
 
 1. **Create `.env`** in the project root with:
    - `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` (Alpaca)
-   - `TICKERS=AAPL,MSFT,GOOGL,AMZN,TSLA` (optional)
+   - `ACTIVE_SYMBOLS_FILE`, `OPPORTUNITY_ENGINE_ENABLED=true`, `SCREENER_UNIVERSE=lab_12` (scanner runs at start and 8am ET on market days)
    - Do **not** set `REDIS_URL` or `BRAIN_CMD` — the compose file sets them for the app container.
 
 2. **From the project root** (either command):
@@ -70,7 +69,7 @@ One command runs the full stack (Go + Redis + Python brain) the same way locally
   - `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`
   - `REDIS_URL=<your-redis-cloud-url>`
   - `BRAIN_CMD="python3 /app/python-brain/apps/consumer.py"`
-  - `TICKERS=...` (optional)
+  - `ACTIVE_SYMBOLS_FILE`, `OPPORTUNITY_ENGINE_ENABLED=true`, `SCREENER_UNIVERSE` (tickers from scanner)
 - **Secrets:** Store Alpaca keys and Redis password in AWS Secrets Manager or Parameter Store and inject into the task/instance.
 - **Compose on a server:** You can run `docker compose` on an EC2 (or similar) and use an override for production:
   - No local `redis` service; set `REDIS_URL` to Redis Cloud.
@@ -100,7 +99,7 @@ From the **project root**:
    set -a && source .env && set +a && cd go-engine && go run .
    ```
 
-Make sure `.env` contains your real Alpaca keys. Use `TICKERS=AAPL,TSLA,NVDA,META` to change symbols.
+Make sure `.env` contains your real Alpaca keys and scanner config (`ACTIVE_SYMBOLS_FILE`, `OPPORTUNITY_ENGINE_ENABLED=true`, `SCREENER_UNIVERSE`) so the engine gets tickers from the scanner.
 
 ## How to test
 
@@ -216,7 +215,7 @@ cd /path/to/sentry-bridge
 set -a && source .env && set +a && cd go-engine && go run .
 ```
 
-The Python brain (`python-brain/apps/consumer.py`) reads stdin, logs events, and runs an **AI-driven strategy** on each news item: sentiment (VADER, or optional FinBERT) + probability of gain from returns/volatility → **buy / sell / hold**. When paper trading is enabled, it **places market orders** on Alpaca (paper account) for the tickers in `TICKERS`.
+The Python brain (`python-brain/apps/consumer.py`) reads stdin, logs events, and runs an **AI-driven strategy** on each news item: sentiment (VADER, or optional FinBERT) + probability of gain from returns/volatility → **buy / sell / hold**. When paper trading is enabled, it **places market orders** on Alpaca (paper account) for the tickers from the scanner (ACTIVE_SYMBOLS_FILE).
 
 ### Paper trading (AI buy/sell)
 
@@ -239,7 +238,9 @@ The brain decides when to buy or sell using:
    APCA_API_SECRET_KEY=...
    BRAIN_CMD=python3 python-brain/apps/consumer.py
    TRADE_PAPER=true
-   TICKERS=AAPL,TSLA,NVDA
+   ACTIVE_SYMBOLS_FILE=data/active_symbols.txt
+   OPPORTUNITY_ENGINE_ENABLED=true
+   SCREENER_UNIVERSE=lab_12
    ```
 
 3. **Optional tuning** (defaults shown):
@@ -369,7 +370,7 @@ redis-cli XRANGE market:updates - + COUNT 5
 2. **App on AWS (us-east-1)**
    - Run the Go engine (and optional Python brain) on **EC2**, **ECS/Fargate**, or **App Runner** in **us-east-1** so it’s in the same region as Redis Cloud.
    - Set environment variables (no `.env` file in prod):  
-     `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `REDIS_URL=<your-redis-cloud-url>`, `REDIS_STREAM=market:updates`, `TICKERS`, and optionally `BRAIN_CMD` if the brain runs in the same task/instance.
+     `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `REDIS_URL=<your-redis-cloud-url>`, `REDIS_STREAM=market:updates`, `ACTIVE_SYMBOLS_FILE` (and scanner env), and optionally `BRAIN_CMD` if the brain runs in the same task/instance.
    - For **BRAIN_CMD** in ECS/Fargate: either build a single image that runs both Go and Python (e.g. a shell script that starts the brain then the engine), or run the brain as a sidecar and use a local socket/Redis instead of stdin (more involved). Easiest: one container that runs `go run .` with `BRAIN_CMD` pointing to a Python script in the image.
 
 3. **REDIS_URL in production**

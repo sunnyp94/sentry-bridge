@@ -40,7 +40,7 @@ def main() -> int:
     universe_name = args.universe or getattr(brain_config, "SCREENER_UNIVERSE", "lab_12")
     universe = get_universe(universe_name)
     if not universe:
-        print("Empty universe; set --universe or SCREENER_UNIVERSE / TICKERS", file=sys.stderr)
+        print("Empty universe; set --universe or SCREENER_UNIVERSE", file=sys.stderr)
         return 1
 
     top_n = args.top if args.top is not None else getattr(brain_config, "SCREENER_TOP_N", 5)
@@ -58,9 +58,21 @@ def main() -> int:
         bars_by_sym = get_bars_chunked(universe, days, chunk_size=chunk_size, delay_between_chunks_sec=chunk_delay)
     else:
         bars_by_sym = get_bars(universe, days)
+
     if not bars_by_sym:
-        print("No bar data; check Alpaca keys and universe symbols", file=sys.stderr)
-        return 1
+        # No bar data (e.g. weekend, market closed, or API issue): write fallback so the engine can start
+        active = universe[:top_n]
+        out_path = args.out or getattr(brain_config, "ACTIVE_SYMBOLS_FILE", "").strip()
+        if out_path:
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w") as f:
+                for s in active:
+                    f.write(s + "\n")
+            print("No bar data (market closed?); wrote fallback list to %s: %s" % (out_path, active), file=sys.stderr)
+        else:
+            for s in active:
+                print(s)
+        return 0
 
     scored = score_universe(
         bars_by_sym,

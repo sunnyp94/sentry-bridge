@@ -1,5 +1,6 @@
 // Package config loads all engine settings from environment variables (.env or shell).
-// Required: APCA_API_KEY_ID, APCA_API_SECRET_KEY. Optional: TICKERS, ACTIVE_SYMBOLS_FILE, data URLs, Redis, BRAIN_CMD, STREAM.
+// Required: APCA_API_KEY_ID, APCA_API_SECRET_KEY, ACTIVE_SYMBOLS_FILE (scanner runs at startup and 8am ET on market days).
+// Optional: data URLs, Redis, BRAIN_CMD, STREAM.
 package config
 
 import (
@@ -12,8 +13,7 @@ import (
 
 // Load reads configuration from the environment.
 // Required: APCA_API_KEY_ID, APCA_API_SECRET_KEY.
-// Optional: TICKERS (comma-separated fallback), ACTIVE_SYMBOLS_FILE (one symbol per line; used when set and file exists),
-//           ALPACA_DATA_BASE_URL, STREAM (true = WebSocket streaming; default true).
+// Optional: ALPACA_DATA_BASE_URL, STREAM (true = WebSocket streaming; default true).
 func Load() (*Config, error) {
 	baseURL := os.Getenv("ALPACA_DATA_BASE_URL")
 	if baseURL == "" {
@@ -88,47 +88,35 @@ func dataURLToStreamWS(dataURL string) string {
 	return "wss://stream.data.alpaca.markets"
 }
 
-// loadTickers returns symbols to stream. If ACTIVE_SYMBOLS_FILE is set and the file exists,
-// read one symbol per line from it (scanner output). Otherwise use TICKERS (comma-separated).
+// loadTickers returns symbols to stream. Only from ACTIVE_SYMBOLS_FILE (scanner output).
+// Scanner runs at container start and at 8am ET on full market days.
 func loadTickers() []string {
 	filePath := os.Getenv("ACTIVE_SYMBOLS_FILE")
-	if filePath != "" {
-		if !filepath.IsAbs(filePath) {
-			if cwd, err := os.Getwd(); err == nil {
-				filePath = filepath.Join(cwd, filePath)
-			}
-		}
-		if f, err := os.Open(filePath); err == nil {
-			defer f.Close()
-			var syms []string
-			sc := bufio.NewScanner(f)
-			for sc.Scan() {
-				t := strings.TrimSpace(sc.Text())
-				if t != "" && !strings.HasPrefix(t, "#") {
-					syms = append(syms, strings.ToUpper(t))
-				}
-			}
-			if err := sc.Err(); err == nil && len(syms) > 0 {
-				return syms
-			}
+	if filePath == "" {
+		return nil
+	}
+	if !filepath.IsAbs(filePath) {
+		if cwd, err := os.Getwd(); err == nil {
+			filePath = filepath.Join(cwd, filePath)
 		}
 	}
-	tickersStr := os.Getenv("TICKERS")
-	if tickersStr == "" {
-		tickersStr = "CRWD,SNOW,DDOG,NET,MDB,DECK,POOL,SOFI,XPO,HIMS,FIVE,ZS"
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil
 	}
-	return parseTickers(tickersStr)
-}
-
-func parseTickers(s string) []string {
-	var out []string
-	for _, t := range strings.Split(s, ",") {
-		t = strings.TrimSpace(t)
-		if t != "" {
-			out = append(out, strings.ToUpper(t))
+	defer f.Close()
+	var syms []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		t := strings.TrimSpace(sc.Text())
+		if t != "" && !strings.HasPrefix(t, "#") {
+			syms = append(syms, strings.ToUpper(t))
 		}
 	}
-	return out
+	if sc.Err() != nil || len(syms) == 0 {
+		return nil
+	}
+	return syms
 }
 
 // Config holds loaded env: Alpaca keys, data/trading/stream URLs, tickers, Redis, and brain command.

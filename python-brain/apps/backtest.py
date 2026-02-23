@@ -424,21 +424,21 @@ def run_backtest_unified(symbols: list[str], days: int = 90, initial_cash: float
 
 def main():
     parser = argparse.ArgumentParser(description="Backtest strategy on Alpaca daily bars")
-    parser.add_argument("--symbols", type=str, default=None, help="Comma-separated symbols (default: TICKERS env)")
+    parser.add_argument("--symbols", type=str, default=None, help="Comma-separated symbols (default: AAPL for minimal test)")
     parser.add_argument("--days", type=int, default=None, help="Days of history (default 90, or 365 * --years)")
     parser.add_argument("--years", type=float, default=None, help="Years of history (e.g. 2 for last 2 years); overrides --days")
     parser.add_argument("--cash", type=float, default=100_000.0, help="Initial cash (default 100000)")
     parser.add_argument("--debug", action="store_true", help="Print why buys are blocked (first symbol)")
     args = parser.parse_args()
     days = int(args.years * 365) if args.years is not None else (args.days if args.days is not None else 90)
-    symbols = [s.strip().upper() for s in (args.symbols or os.environ.get("TICKERS", "CRWD,SNOW,DDOG,NET,MDB,DECK,POOL,SOFI,XPO,HIMS,FIVE,ZS")).split(",") if s.strip()]
+    symbols = [s.strip().upper() for s in (args.symbols or os.environ.get("TICKERS", "AAPL")).split(",") if s.strip()]
     if not symbols:
         print("Provide --symbols or TICKERS env", file=sys.stderr)
         sys.exit(1)
     print("Backtest symbols=%s days=%d initial_cash=%.0f (config: brain.config + .env)" % (symbols, days, args.cash), file=sys.stderr)
     results = run_backtest_unified(symbols, days=days, initial_cash=args.cash, debug=args.debug)
     if not results:
-        print("No bar data; check Alpaca keys and TICKERS", file=sys.stderr)
+        print("No bar data; check Alpaca keys and --symbols", file=sys.stderr)
         sys.exit(1)
     meta = results[-1]
     results = [r for r in results if isinstance(r, dict) and "symbol" in r and r.get("symbol")]
