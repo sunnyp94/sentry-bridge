@@ -1,6 +1,6 @@
 """
 News sentiment: one score in [-1, 1] from headline + summary using FinBERT (or VADER if FinBERT unavailable).
-Used as the "news" source in signals.composite and for kill-switch (bad news) in strategy.
+Used for kill-switch (bad news) in strategy.
 """
 from typing import Optional
 

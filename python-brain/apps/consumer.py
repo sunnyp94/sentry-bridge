@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Stdin consumer: entry point when Go pipes NDJSON to the brain.
-Reads events from stdin, updates state, runs strategy (composite + rules), places paper orders when enabled.
+Reads events from stdin, updates state, runs strategy (Green Light: technical + structure + OFI), places paper orders when enabled.
 Invoked by Go via BRAIN_CMD, e.g. python3 /app/python-brain/apps/consumer.py
 """
 import sys
@@ -39,8 +39,7 @@ from brain.strategy import (
     Decision,
     STOP_LOSS_PCT,
 )
-from brain.signals.composite import composite_score
-from brain.rules.consensus import consensus_allows_buy
+from brain.signals import score_news, technical_score
 from brain.rules.daily_cap import update_equity, is_daily_cap_reached, should_flat_all_for_daily_target
 from brain.rules.drawdown import update_drawdown_peak, is_drawdown_halt
 from brain.market_calendar import is_full_trading_day
@@ -200,7 +199,7 @@ _scaled_50_at_vwap: set = set()
 # Scale-out: levels (e.g. 0.01, 0.02, 0.03) already hit per symbol
 _scale_out_done: dict[str, set] = {}
 session_by_symbol: dict[str, str] = defaultdict(lambda: "regular")
-ORDER_COOLDOWN_SEC = 60
+ORDER_COOLDOWN_SEC = getattr(brain_config, "ORDER_COOLDOWN_SEC", 30)
 last_order_time_by_symbol: dict[str, float] = {}
 # Rolling price history per symbol for RSI/technical (when USE_TECHNICAL_INDICATORS=true)
 price_history_by_symbol: dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
@@ -333,7 +332,7 @@ def run_stop_loss_check() -> None:
             cur_price = float(cur_price) if cur_price is not None else None
         except (TypeError, ValueError):
             cur_price = None
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=True, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window())
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=True, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=None)
         if d.action == "sell" and d.qty > 0:
             if d.reason == "scale_out_50_at_vwap":
                 _scaled_50_at_vwap.add(sym)
@@ -431,36 +430,33 @@ def run_flat_when_daily_target() -> None:
         _try_place_order(d, skip_cooldown=True)
 
 
-def run_strategy_on_news(payload: dict) -> None:
-    symbols = payload.get("symbols") or []
+_last_strategy_run_time: float = 0.0
+
+
+def run_strategy_for_symbols(symbols: list) -> None:
+    """Run Green Light strategy (decide + place order) for each symbol. Uses tape data only (no news)."""
     if not symbols:
         return
-    # Opportunity Engine: only activate for screener's top N symbols today
-    active = _get_active_symbols()
-    if active is not None:
-        symbols = [s for s in symbols if s in active]
-        if not symbols:
-            log.debug("news symbols none in active set; skipping strategy")
-            return
-        log.debug("opportunity_engine active_symbols=%s news_filtered=%s", len(active), symbols)
-    t0 = _PERF()
-    composite_result = composite_score(news_payload=payload, symbol_payload=None, social_score=None, price_series=None)
-    raw_news = composite_result.sources["news"]
-    set_kill_switch_from_news(raw_news)
-    consensus_ok = consensus_allows_buy(composite_result)
     daily_cap = is_daily_cap_reached()
     drawdown_halt = is_drawdown_halt()
-    composite_ms = (_PERF() - t0) * 1000
-    t1 = _PERF()
+    t0 = _PERF()
     for sym in symbols:
         combined = dict(last_payload_by_symbol.get(sym, {}))
         combined.setdefault("return_1m", 0)
         combined.setdefault("return_5m", 0)
         combined.setdefault("annualized_vol_30d", 0)
         price_series = list(price_history_by_symbol[sym]) if brain_config.USE_TECHNICAL_INDICATORS else None
-        cr_sym = composite_score(news_payload=payload, symbol_payload=combined, social_score=None, price_series=price_series)
-        sentiment_by_symbol[sym] = cr_sym.composite
-        sent_ema = update_and_get_sentiment_ema(sym, cr_sym.composite)
+        tech = technical_score(
+            price_series or [],
+            rsi_period=getattr(brain_config, "RSI_PERIOD", 14),
+            use_macd=getattr(brain_config, "USE_MACD", True),
+            macd_fast=getattr(brain_config, "MACD_FAST", 12),
+            macd_slow=getattr(brain_config, "MACD_SLOW", 26),
+            macd_signal=getattr(brain_config, "MACD_SIGNAL", 9),
+            use_patterns=getattr(brain_config, "USE_PATTERNS", True),
+            pattern_lookback=getattr(brain_config, "PATTERN_LOOKBACK", 40),
+        ) if price_series else None
+        sent_ema = update_and_get_sentiment_ema(sym, tech if tech is not None else 0.0)
         prob = probability_gain(combined)
         pos_qty = positions_qty.get(sym, 0)
         try:
@@ -474,16 +470,44 @@ def run_strategy_on_news(payload: dict) -> None:
             cur_price = float(cur_price) if cur_price is not None else None
         except (TypeError, ValueError):
             cur_price = None
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=consensus_ok, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window())
+        _structure_ok = _trend_ok(sym)
+        _ltf_prices = list(price_history_by_symbol.get(sym, []))
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=True, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=tech, structure_ok=_structure_ok, ltf_prices=_ltf_prices)
         if d.reason == "scale_out_50_at_vwap":
             _scaled_50_at_vwap.add(sym)
         log.info(
-            "strategy symbol=%s sources=%s sentiment_ema=%.2f prob_gain=%.2f consensus_ok=%s -> action=%s qty=%d reason=%s",
-            d.symbol, cr_sym.sources, sent_ema, prob, consensus_ok, d.action, d.qty, d.reason,
+            "strategy symbol=%s technical=%.2f prob_gain=%.2f -> action=%s qty=%d reason=%s",
+            d.symbol, tech or 0, prob, d.action, d.qty, d.reason,
         )
         _try_place_order(d)
-    strategy_ms = (_PERF() - t1) * 1000
-    log.info("latency step=news composite_ms=%.1f strategy_ms=%.1f", composite_ms, strategy_ms)
+    log.info("latency step=strategy_run symbols=%d ms=%.1f", len(symbols), (_PERF() - t0) * 1000)
+
+
+def _maybe_run_strategy_interval() -> None:
+    """If STRATEGY_INTERVAL_SEC has elapsed, run strategy for watchlist (not news-triggered)."""
+    global _last_strategy_run_time
+    interval = getattr(brain_config, "STRATEGY_INTERVAL_SEC", 45)
+    if interval <= 0:
+        return
+    now = time.time()
+    if now - _last_strategy_run_time < interval:
+        return
+    _last_strategy_run_time = now
+    active = _get_active_symbols()
+    if active is not None:
+        symbols = list(active)
+    else:
+        symbols = list(last_payload_by_symbol.keys())
+    if not symbols:
+        return
+    log.info("strategy interval run symbols=%s", symbols[:20])
+    run_strategy_for_symbols(symbols)
+
+
+def run_strategy_on_news(payload: dict) -> None:
+    """On news: only update kill switch. Buys/sells are triggered by periodic strategy run, not news."""
+    raw_news = score_news(payload)
+    set_kill_switch_from_news(raw_news)
 
 
 def handle_event(ev: dict) -> None:
@@ -588,6 +612,8 @@ def handle_event(ev: dict) -> None:
         log.info("latency step=positions get_equity_ms=%.1f stop_loss_ms=%.1f", get_equity_ms, stop_loss_ms)
     elif typ == "news":
         run_strategy_on_news(payload)
+    # Periodic strategy run (Green Light) — not news-only; runs every STRATEGY_INTERVAL_SEC
+    _maybe_run_strategy_interval()
 
 
 def _run_scanner_at_startup() -> None:

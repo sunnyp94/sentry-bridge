@@ -12,7 +12,7 @@ Prints one event per line to stdout. Pipe into the stdin consumer:
   TRADE_PAPER=false python3 python-brain/apps/replay_e2e.py | python3 python-brain/apps/consumer.py
 
 Event sequence: volatility (AAPL) → trade (AAPL, with returns) → news (positive headline for AAPL).
-The brain will run composite (news + momentum), consensus, and decide() on the news event.
+The brain will run score_news (kill switch), technical_score, and decide() (Green Light) on the news event.
 """
 import json
 import sys

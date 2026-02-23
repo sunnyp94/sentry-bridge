@@ -25,7 +25,9 @@ func Load() (*Config, error) {
 	}
 	tickers := loadTickers()
 	stream := strings.ToLower(os.Getenv("STREAM")) != "false" && strings.ToLower(os.Getenv("STREAM")) != "0"
-	// Algo Trader Plus: set ALPACA_DATA_FEED=sip for full SIP (all US exchanges). Default iex for free tier.
+	// Alpaca Algo Trader Plus ($99/mo) helps with: (1) ALPACA_DATA_FEED=sip = full US SIP (all exchanges, not just IEX).
+	// (2) Higher rate limits (10k/min), unlimited WebSocket symbols, no 15-min delay. (3) Better fill context and
+	// execution data. OFI is still computed locally from trades/quotes (Alpaca does not provide trade-side in market data).
 	dataFeed := strings.ToLower(os.Getenv("ALPACA_DATA_FEED"))
 	if dataFeed != "sip" && dataFeed != "iex" {
 		dataFeed = "iex"

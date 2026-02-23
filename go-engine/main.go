@@ -284,7 +284,7 @@ func runStreaming(cfg *config.Config) {
 				posPayload = append(posPayload, map[string]interface{}{
 					"symbol": p.Symbol, "qty": p.Qty, "side": p.Side,
 					"market_value": p.MarketValue, "cost_basis": p.CostBasis,
-					"unrealized_pl": p.UnrealizedPL, "unrealized_plpc": p.UnrealizedPLPC, "current_price": p.CurrentPrice,
+					"unrealized_pl": p.UnrealizedPL, "unrealized_plpc": p.UnrealizedPLPC, "current_price": float64(p.CurrentPrice),
 				})
 			}
 			if brainPipe != nil {

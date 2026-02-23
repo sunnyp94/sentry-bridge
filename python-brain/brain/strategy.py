@@ -1,8 +1,9 @@
 """
-Strategy: single place that turns signals and rules into buy/sell/hold.
-- Uses composite score (news + social + momentum) and consensus_ok from the consumer.
-- Applies rules in order: stop loss -> sell (bearish/prob drop) -> kill switch -> daily cap -> opening window -> consensus -> buy thresholds.
-- All thresholds and flags come from config.py (env). Add new rules in rules/ and call them from decide().
+Strategy: Green Light only. Single place that turns signals and rules into buy/sell/hold.
+- Buy: 4-point checklist (Structure + Pattern + Momentum + OFI). No news/social/momentum.
+- Structure: HTF trend (price > 50 EMA), pause longs on double top/H&S. Pattern at confluence (Z or VWAP). RSI/MACD energy; RSI>70 block unless OFI.
+- Exit: stop 2×ATR, TP = TAKE_PROFIT_R_MULTIPLE×risk (e.g. 3R), VWAP target, trailing, breakeven. EXIT_ONLY_STOP_AND_TP = no sentiment/prob exit.
+- All thresholds from config.py (env).
 """
 import logging
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ from . import config
 
 log = logging.getLogger("brain.strategy")
 
-# Per-symbol sentiment EMA (smooths composite score so one headline doesn't flip the decision).
+# Per-symbol sentiment EMA (smooths technical score for optional use).
 _sentiment_ema: Dict[str, float] = {}
 # Kill switch: when True, no new buys (set by bad news, market stress, or KILL_SWITCH env).
 _kill_switch_active = os.environ.get("KILL_SWITCH", "").lower() in ("true", "1", "yes")
@@ -154,23 +155,14 @@ def decide(
     spy_below_200ma: Optional[bool] = None,
     scaled_50_at_vwap: bool = False,
     in_health_check_window: bool = False,
+    technical_score: Optional[float] = None,
+    structure_ok: Optional[bool] = None,
+    ltf_prices: Optional[list] = None,
 ) -> Decision:
     """
-    Orchestrate rules and thresholds into a single decision.
-    vol_ok: when False, no new buy (vol too high). peak_unrealized_pl_pct/bars_held for trailing/breakeven/max_hold.
-    atr_stop_pct: when USE_ATR_STOP and set, use this as stop distance (%); else fixed STOP_LOSS_PCT.
-    vwap_distance_pct: % distance from VWAP (positive = above); used for mean-reversion filter and TP-at-VWAP exit.
-    returns_zscore: z-score of recent return; trigger at ZSCORE_TRIGGER_ENTRY (e.g. -2.5).
-    ofi: order flow imbalance [-1,1]; trigger requires OFI >= OFI_SURGE_FOR_ENTRY when USE_OFI.
-    atr_percentile: 0-100; filter requires ATR in [ATR_PERCENTILE_MIN, ATR_PERCENTILE_MAX] (tradable band).
-    entry_price, current_price: for breakeven-at-halfway-to-VWAP and trailing ATR above VWAP (backtest/live when available).
-    spy_below_200ma: when True and SPY_200MA_REGIME_ENABLED, use stricter Z for longs and (when shorts exist) favor shorts.
+    Green Light only: buy when 4-point checklist passes; exit on stop/TP/VWAP/trailing/breakeven only.
     """
-    buy_thresh = config.SENTIMENT_BUY_THRESHOLD
-    buy_min_conf = config.SENTIMENT_BUY_MIN_CONFIDENCE
     prob_thresh = config.PROB_GAIN_THRESHOLD
-    sell_sentiment_thresh = config.SENTIMENT_SELL_THRESHOLD
-    prob_sell_thresh = config.PROB_GAIN_SELL_THRESHOLD
     max_qty = config.STRATEGY_MAX_QTY
     # Volatility-adjusted stop: ATR-based when enabled and available
     use_atr = getattr(config, "USE_ATR_STOP", False)
@@ -178,7 +170,12 @@ def decide(
         stop_loss_pct = atr_stop_pct / 100.0
     else:
         stop_loss_pct = config.STOP_LOSS_PCT / 100.0
-    take_profit_pct = config.TAKE_PROFIT_PCT / 100.0 if config.TAKE_PROFIT_PCT > 0 else None
+    # TP = 3× risk when TAKE_PROFIT_R_MULTIPLE set (e.g. stop 2 ATR → TP 6 ATR)
+    r_mult = getattr(config, "TAKE_PROFIT_R_MULTIPLE", 0)
+    if r_mult > 0 and use_atr and atr_stop_pct is not None and atr_stop_pct > 0:
+        take_profit_pct = (atr_stop_pct / 100.0) * r_mult
+    else:
+        take_profit_pct = config.TAKE_PROFIT_PCT / 100.0 if config.TAKE_PROFIT_PCT > 0 else None
     vol_max = getattr(config, "VOL_MAX_FOR_ENTRY", 0)
     breakeven_act = getattr(config, "BREAKEVEN_ACTIVATION_PCT", 0) / 100.0 if getattr(config, "BREAKEVEN_ACTIVATION_PCT", 0) > 0 else None
     trail_act = getattr(config, "TRAILING_STOP_ACTIVATION_PCT", 0) / 100.0 if getattr(config, "TRAILING_STOP_ACTIVATION_PCT", 0) > 0 else None
@@ -246,10 +243,6 @@ def decide(
     if max_hold_days > 0 and have_position and bars_held is not None and bars_held >= max_hold_days:
         return Decision("sell", symbol, min(abs(position_qty), max_qty), f"max_hold_days={bars_held}")
 
-    # Sell: bearish or prob drop (skipped when EXIT_ONLY_STOP_AND_TP — hold until stop or take-profit)
-    if not getattr(config, "EXIT_ONLY_STOP_AND_TP", False) and have_position and (sentiment <= sell_sentiment_thresh or prob_gain < prob_sell_thresh):
-        return Decision("sell", symbol, min(abs(position_qty), max_qty), f"sentiment={sentiment:.2f} prob_gain={prob_gain:.2f}")
-
     # Buy: kill switch
     if is_kill_switch_active():
         return Decision("hold", symbol, 0, "kill_switch_active")
@@ -266,83 +259,51 @@ def decide(
     if not have_position and is_after_no_new_buys():
         return Decision("hold", symbol, 0, "after_no_new_buys")
 
-    # Buy: consensus (e.g. 2 of 3 sources positive; if News positive but Social meh -> stay cash)
-    if not consensus_ok:
-        return Decision("hold", symbol, 0, "consensus_not_met")
+    # Buy: Green Light — 4-point checklist. Liberal: when data missing, allow (don't block).
+    if not have_position:
+        # 1) Structure: HTF trend aligned. When unknown (None), allow (liberal).
+        _structure_ok = structure_ok if structure_ok is not None else trend_ok
+        if _structure_ok is False:
+            return Decision("hold", symbol, 0, "green_light_structure")
+        # 2) Pattern: valid at confluence. Scalp: technical >= TECHNICAL_MIN (e.g. -0.35); when no data, allow.
+        confluence_z = getattr(config, "CONFLUENCE_Z_MAX", 0.5)
+        tech_min = getattr(config, "TECHNICAL_MIN_FOR_ENTRY", -0.35)
+        at_z = returns_zscore is not None and returns_zscore <= confluence_z
+        at_vwap = vwap_distance_pct is not None and vwap_distance_pct >= 0
+        no_confluence_data = returns_zscore is None and vwap_distance_pct is None
+        # When no technical score, allow (scalp). When present, require >= tech_min and at confluence or no confluence data.
+        pattern_ok = (technical_score is None) or (
+            technical_score >= tech_min and (at_z or at_vwap or no_confluence_data)
+        )
+        if not pattern_ok:
+            return Decision("hold", symbol, 0, "green_light_pattern")
+        # 3) Momentum: scalp = skip (always allow); otherwise RSI divergence or MACD above zero when enough bars
+        momentum_ok = True  # scalp: don't block on momentum
+        if not getattr(config, "SCALP_SKIP_MOMENTUM", True) and ltf_prices and len(ltf_prices) >= 20:
+            from .signals.technical import rsi_bullish_divergence, macd_histogram_above_zero
+            momentum_ok = rsi_bullish_divergence(ltf_prices, period=getattr(config, "RSI_PERIOD", 14)) or macd_histogram_above_zero(ltf_prices)
+        if not momentum_ok:
+            return Decision("hold", symbol, 0, "green_light_momentum")
+        # 4) Microstructure: OFI >= surge when available. Scalp: surge=0 so any OFI or no data passes.
+        ofi_surge = getattr(config, "OFI_SURGE_FOR_ENTRY", 0.0)
+        ofi_ok = (ofi is None) or (ofi >= ofi_surge)
+        if not ofi_ok:
+            return Decision("hold", symbol, 0, f"green_light_ofi {ofi:.2f}")
+        # RSI overbought: allow up to RSI_OVERBOUGHT; above that need OFI >= min (liberal defaults).
+        rsi_ob = getattr(config, "RSI_OVERBOUGHT", 75)
+        rsi_ob_ofi_min = getattr(config, "RSI_OVERBOUGHT_OFI_MIN", 0.20)
+        rsi_overbought_ok = True
+        if ltf_prices and len(ltf_prices) >= getattr(config, "RSI_PERIOD", 14) + 1:
+            from .signals.technical import rsi_value
+            rsi_val = rsi_value(ltf_prices, getattr(config, "RSI_PERIOD", 14))
+            if rsi_val is not None and rsi_val > rsi_ob:
+                rsi_overbought_ok = ofi is not None and ofi >= rsi_ob_ofi_min
+        if not rsi_overbought_ok:
+            return Decision("hold", symbol, 0, "green_light_rsi_overbought")
+        if prob_gain >= prob_thresh:
+            return Decision("buy", symbol, min(1, max_qty), "green_light_4pt")
 
-    # Pillar 2: Regime filter — only fire mean-reversion in choppy regime, trend in trending regime
-    if getattr(config, "REGIME_FILTER_ENABLED", False) and regime is not None and not have_position:
-        use_vwap = getattr(config, "USE_VWAP_ANCHOR", False)
-        use_z = getattr(config, "USE_ZSCORE_MEAN_REVERSION", False)
-        if regime == "trend" and (use_vwap or use_z) and (trend_ok is False or not config.TREND_FILTER_ENABLED):
-            return Decision("hold", symbol, 0, "regime_trend_no_mr")
-        if regime == "mean_reversion" and config.TREND_FILTER_ENABLED and trend_ok is True and not (use_vwap or use_z):
-            return Decision("hold", symbol, 0, "regime_mr_no_trend")
-
-    # Buy: trend filter (only long when price above SMA when enabled)
-    if config.TREND_FILTER_ENABLED and not have_position and trend_ok is False:
-        return Decision("hold", symbol, 0, "trend_filter_below_sma")
-
-    # Buy: volatility filter (don't open in extreme vol — improves forward robustness)
-    if vol_max > 0 and vol_ok is False and not have_position:
-        return Decision("hold", symbol, 0, "vol_too_high")
-
-    # Buy: VWAP filter — only long when price below VWAP (mean reversion bias), or no buy when extended above
-    use_vwap = getattr(config, "USE_VWAP_ANCHOR", False)
-    vwap_long_only_below = getattr(config, "VWAP_LONG_ONLY_BELOW", True)
-    vwap_extended_pct = getattr(config, "VWAP_MEAN_REVERSION_PCT", 2.0)
-    if use_vwap and not have_position and vwap_distance_pct is not None:
-        if vwap_long_only_below and vwap_distance_pct > 0:
-            return Decision("hold", symbol, 0, "vwap_above_no_long")
-        if not vwap_long_only_below and vwap_distance_pct > vwap_extended_pct:
-            return Decision("hold", symbol, 0, f"vwap_extended {vwap_distance_pct:.1f}%")
-    # Two-stage entry: only long when price is at least N×ATR below VWAP and OFI shows buying pressure
-    entry_atr_below = getattr(config, "TWO_STAGE_ENTRY_ATR_BELOW_VWAP", 0)
-    if entry_atr_below > 0 and not have_position and vwap_distance_pct is not None and atr_stop_pct is not None:
-        atr_mult = getattr(config, "ATR_STOP_MULTIPLE", 2.0)
-        # Require price <= VWAP - N×ATR  =>  vwap_distance_pct <= - (N × ATR/VWAP %). ATR% ≈ atr_stop_pct/atr_mult.
-        threshold_pct = - (entry_atr_below * atr_stop_pct / atr_mult)
-        if vwap_distance_pct > threshold_pct:
-            return Decision("hold", symbol, 0, f"two_stage_entry price not {entry_atr_below}×ATR below vwap ({vwap_distance_pct:.2f}% > {threshold_pct:.2f}%)")
-    if entry_atr_below > 0 and not have_position and ofi is not None and ofi < 0:
-        return Decision("hold", symbol, 0, f"two_stage_entry ofi_negative {ofi:.2f}")
-    # Buy: ATR tradable band — only trade when ATR in percentile range (avoid extreme vol)
-    atr_pct_min = getattr(config, "ATR_PERCENTILE_MIN", 0)
-    atr_pct_max = getattr(config, "ATR_PERCENTILE_MAX", 100)
-    if atr_percentile is not None and not have_position:
-        if atr_pct_max < 100 and atr_percentile > atr_pct_max:
-            return Decision("hold", symbol, 0, f"atr_percentile_high {atr_percentile:.0f}")
-        if atr_pct_min > 0 and atr_percentile < atr_pct_min:
-            return Decision("hold", symbol, 0, f"atr_percentile_low {atr_percentile:.0f}")
-
-    # Z-Score trigger: entry when Z <= ZSCORE_TRIGGER_ENTRY (-2.5 or -3.0); boost sentiment for oversold
-    # Global filter: when SPY below 200 MA, use stricter Z (SPY_BELOW_200MA_Z_TIGHTEN) for long entry
-    effective_sentiment = sentiment
-    use_zscore = getattr(config, "USE_ZSCORE_MEAN_REVERSION", False)
-    zscore_trigger = getattr(config, "ZSCORE_TRIGGER_ENTRY", -2.5)
-    zscore_thresh = getattr(config, "ZSCORE_MEAN_REVERSION_BUY", -2.5)
-    if getattr(config, "SPY_200MA_REGIME_ENABLED", False) and spy_below_200ma is True:
-        z_tighten = getattr(config, "SPY_BELOW_200MA_Z_TIGHTEN", -2.8)
-        zscore_trigger = z_tighten
-        zscore_thresh = z_tighten
-    ofi_surge = getattr(config, "OFI_SURGE_FOR_ENTRY", 0.25)
-    use_ofi_trigger = getattr(config, "USE_OFI", False) and ofi_surge > 0
-    if use_zscore and not have_position and returns_zscore is not None and returns_zscore <= zscore_thresh:
-        boost = min(0.20, (zscore_thresh - returns_zscore) * 0.05)
-        effective_sentiment = sentiment + boost
-    # Trigger (when MICROSTRUCTURE_ENTRY_MODE): require Z <= zscore_trigger and OFI >= surge
-    micro_mode = getattr(config, "MICROSTRUCTURE_ENTRY_MODE", False)
-    if micro_mode and not have_position and use_zscore and (returns_zscore is None or returns_zscore > zscore_trigger):
-        return Decision("hold", symbol, 0, f"z_above_trigger {returns_zscore:.2f}" if returns_zscore is not None else "z_na")
-    # Require OFI >= surge only when OFI data is present (backtest has no tape; live requires it)
-    if micro_mode and not have_position and use_ofi_trigger and ofi is not None and ofi < ofi_surge:
-        return Decision("hold", symbol, 0, f"ofi_below_surge {ofi:.2f}")
-
-    # Buy: conviction + prob_gain
-    if not have_position and effective_sentiment >= buy_thresh and effective_sentiment >= buy_min_conf and prob_gain >= prob_thresh:
-        return Decision("buy", symbol, min(1, max_qty), f"sentiment={effective_sentiment:.2f} prob_gain={prob_gain:.2f}")
-
-    return Decision("hold", symbol, 0, f"sentiment={sentiment:.2f} prob_gain={prob_gain:.2f}")
+    return Decision("hold", symbol, 0, "green_light_not_met")
 
 
 # Backward compatibility: expose constants used by consumer

@@ -4,7 +4,6 @@ Central config: all strategy parameters. Change defaults below or set env (e.g. 
 Env override: any name below can be set in the environment (e.g. SENTIMENT_BUY_THRESHOLD=0.22).
 
 Quick reference (env name = default):
-  Consensus:    USE_CONSENSUS, CONSENSUS_MIN_SOURCES_POSITIVE, CONSENSUS_POSITIVE_THRESHOLD
   Daily cap:    DAILY_CAP_ENABLED, DAILY_CAP_PCT, DAILY_LOSS_CAP_PCT
   Buy:          SENTIMENT_BUY_THRESHOLD, SENTIMENT_BUY_MIN_CONFIDENCE, PROB_GAIN_THRESHOLD
   Sell:         EXIT_ONLY_STOP_AND_TP, SENTIMENT_SELL_THRESHOLD, PROB_GAIN_SELL_THRESHOLD
@@ -16,7 +15,7 @@ Quick reference (env name = default):
   Robustness:   VOL_MAX_FOR_ENTRY, BREAKEVEN_ACTIVATION_PCT, TRAILING_STOP_*, MAX_HOLD_DAYS
   Microstructure: USE_ATR_STOP, ATR_PERIOD, ATR_STOP_MULTIPLE | VWAP_* | ZSCORE_* (pro-style indicators)
   Session:      NO_NEW_BUYS_AFTER_ET (15:45)
-  Technical:    RSI + MACD + 3 patterns only (USE_TECHNICAL_INDICATORS, RSI_PERIOD, USE_MACD, USE_PATTERNS, PATTERN_LOOKBACK)
+  Technical:    RSI + MACD + 3 patterns (USE_TECHNICAL_INDICATORS, PATTERN_LOOKBACK); Green Light uses technical only
   Trend:        TREND_FILTER_ENABLED, TREND_SMA_PERIOD (only long when price > SMA)
   Sentiment:    SENTIMENT_EMA_ALPHA
 """
@@ -48,13 +47,6 @@ def _int(name: str, default: str) -> int:
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
-# Consensus (require multiple sources positive — avoid single-signal entries)
-# -----------------------------------------------------------------------------
-USE_CONSENSUS = _bool("USE_CONSENSUS", "true")
-CONSENSUS_MIN_SOURCES_POSITIVE = _int("CONSENSUS_MIN_SOURCES_POSITIVE", "2")   # 2 of 3 (news, social, momentum)
-CONSENSUS_POSITIVE_THRESHOLD = _float("CONSENSUS_POSITIVE_THRESHOLD", "0.15")  # score >= this = "positive"
-
-# -----------------------------------------------------------------------------
 # Daily profit target: make a small gain and stop (no new buys; optionally flat all)
 # Daily loss cap: no new buys when daily PnL <= -X% (stop the bleeding)
 # -----------------------------------------------------------------------------
@@ -72,10 +64,10 @@ FLAT_WHEN_DAILY_TARGET_HIT = _bool("FLAT_WHEN_DAILY_TARGET_HIT", "false")
 # Buy thresholds (stricter = fewer, higher-quality mean-reversion entries)
 # -----------------------------------------------------------------------------
 SENTIMENT_EMA_ALPHA = _float("SENTIMENT_EMA_ALPHA", "0.35")
-# Balanced: enough entries for mean reversion, not noise
+# Balanced: enough entries for mean reversion, not noise (liberal: lower = more trades)
 SENTIMENT_BUY_THRESHOLD = _float("SENTIMENT_BUY_THRESHOLD", "0.10")
 SENTIMENT_BUY_MIN_CONFIDENCE = _float("SENTIMENT_BUY_MIN_CONFIDENCE", "0.18")
-PROB_GAIN_THRESHOLD = _float("PROB_GAIN_THRESHOLD", "0.50")
+PROB_GAIN_THRESHOLD = _float("PROB_GAIN_THRESHOLD", "0.12")  # scalp: very low bar for entry
 
 # -----------------------------------------------------------------------------
 # Sell thresholds (hold through noise — exit only on clear failure or take-profit/stop)
@@ -88,11 +80,13 @@ PROB_GAIN_SELL_THRESHOLD = _float("PROB_GAIN_SELL_THRESHOLD", "0.32")
 # -----------------------------------------------------------------------------
 # Sizing and session (Pillar 1: Risk First)
 # -----------------------------------------------------------------------------
-STRATEGY_MAX_QTY = _int("STRATEGY_MAX_QTY", "4")  # higher risk: allow larger position per symbol
+STRATEGY_MAX_QTY = _int("STRATEGY_MAX_QTY", "12")  # risky: larger position per symbol
 # Position sizing: when RISK_PCT_PER_TRADE > 0, size by risk (qty = risk_amount / (ATR*mult)); else use POSITION_SIZE_PCT.
-RISK_PCT_PER_TRADE = _float("RISK_PCT_PER_TRADE", "2.0")  # 2% capital at risk per trade (higher risk / reward)
-POSITION_SIZE_PCT = _float("POSITION_SIZE_PCT", "0.02")  # 2% of equity per position when risk sizing off
+RISK_PCT_PER_TRADE = _float("RISK_PCT_PER_TRADE", "4.0")  # 4% capital at risk per trade
+POSITION_SIZE_PCT = _float("POSITION_SIZE_PCT", "0.04")  # 4% of equity per position when risk sizing off
 STRATEGY_REGULAR_SESSION_ONLY = _bool("STRATEGY_REGULAR_SESSION_ONLY", "true")
+ORDER_COOLDOWN_SEC = _int("ORDER_COOLDOWN_SEC", "30")  # seconds between orders per symbol (liberal: 30)
+STRATEGY_INTERVAL_SEC = _int("STRATEGY_INTERVAL_SEC", "45")  # run strategy (Green Light) for watchlist every N seconds (not news-only)
 # Kelly Criterion: scale risk by optimal fraction from win rate and avg win/loss (cap at KELLY_FRACTION_CAP)
 KELLY_SIZING_ENABLED = _bool("KELLY_SIZING_ENABLED", "false")
 KELLY_FRACTION_CAP = _float("KELLY_FRACTION_CAP", "0.25")  # max fraction of capital per trade (quarter-Kelly)
@@ -112,7 +106,7 @@ LIMIT_ORDER_OFFSET_BPS = _float("LIMIT_ORDER_OFFSET_BPS", "5")
 # Max drawdown halt (no new buys when drawdown from peak >= this % — avoid revenge trading)
 # -----------------------------------------------------------------------------
 DRAWDOWN_HALT_ENABLED = _bool("DRAWDOWN_HALT_ENABLED", "true")
-MAX_DRAWDOWN_PCT = _float("MAX_DRAWDOWN_PCT", "2.5")
+MAX_DRAWDOWN_PCT = _float("MAX_DRAWDOWN_PCT", "5.0")  # 5% before halt (risky default)
 
 # -----------------------------------------------------------------------------
 # Technical: RSI + MACD + 3 patterns (double top, inverted H&S, bull/bear flag) only
@@ -161,9 +155,8 @@ TAKE_PROFIT_PCT = _float("TAKE_PROFIT_PCT", "5.0")  # 5% fixed TP when VWAP far;
 # -----------------------------------------------------------------------------
 # Robustness (improve forward-looking edge, not just backtest fit)
 # -----------------------------------------------------------------------------
-# Don't open new buy when annualized vol > this (avoid blow-ups in chaos)
-# Allow growth names; 0 = no vol filter
-VOL_MAX_FOR_ENTRY = _float("VOL_MAX_FOR_ENTRY", "1.0")  # 0 = disabled
+# Don't open new buy when annualized vol > this (avoid blow-ups in chaos). 0 = no vol filter (more liberal).
+VOL_MAX_FOR_ENTRY = _float("VOL_MAX_FOR_ENTRY", "0")  # 0 = disabled (was 1.0)
 # Move stop to breakeven after 1% profit
 BREAKEVEN_ACTIVATION_PCT = _float("BREAKEVEN_ACTIVATION_PCT", "1.0")  # 0 = disabled
 # Trailing stop: once up 2%, sell if we drop 1% from peak
@@ -200,7 +193,7 @@ ATR_PERCENTILE_MAX = _float("ATR_PERCENTILE_MAX", "90")  # max percentile (e.g. 
 ATR_PERCENTILE_LOOKBACK = _int("ATR_PERCENTILE_LOOKBACK", "60")  # bars for percentile calc
 # OFI: require surge in aggressive buying for entry (absorption → breakout)
 USE_OFI = _bool("USE_OFI", "true")
-OFI_SURGE_FOR_ENTRY = _float("OFI_SURGE_FOR_ENTRY", "0.25")  # require OFI >= this for trigger (e.g. 0.25 = buying pressure)
+OFI_SURGE_FOR_ENTRY = _float("OFI_SURGE_FOR_ENTRY", "0.0")  # scalp: any OFI or no data = pass
 OFI_WINDOW_TRADES = _int("OFI_WINDOW_TRADES", "100")  # rolling window (last N trades per symbol)
 # Exit: primary profit target = return to Daily VWAP (mean reversion)
 TAKE_PROFIT_AT_VWAP = _bool("TAKE_PROFIT_AT_VWAP", "true")  # sell when price >= VWAP (primary target)
@@ -211,6 +204,17 @@ TRAILING_ATR_MULTIPLE = _float("TRAILING_ATR_MULTIPLE", "1.5")  # e.g. 1.5× ATR
 # When true, entry requires filter (price below VWAP, ATR tradable) AND trigger (Z <= ZSCORE_TRIGGER_ENTRY, OFI >= surge)
 # When true, require Z <= ZSCORE_TRIGGER_ENTRY for every buy (on daily bars this yields very few trades; use -1.5 or live tape)
 MICROSTRUCTURE_ENTRY_MODE = _bool("MICROSTRUCTURE_ENTRY_MODE", "false")
+
+# -----------------------------------------------------------------------------
+# Green Light: scalp = loose checklist, mini gains (low R-multiple TP).
+# -----------------------------------------------------------------------------
+STRUCTURE_EMA_PERIOD = _int("STRUCTURE_EMA_PERIOD", "50")  # HTF trend: price > this EMA = bullish; double top/H&S = pause longs
+CONFLUENCE_Z_MAX = _float("CONFLUENCE_Z_MAX", "0.5")  # scalp: pattern valid for almost any Z (0.5 = very loose)
+TAKE_PROFIT_R_MULTIPLE = _float("TAKE_PROFIT_R_MULTIPLE", "1.2")  # scalp: TP = 1.2× risk (mini gains)
+RSI_OVERBOUGHT = _float("RSI_OVERBOUGHT", "80")  # scalp: allow buy up to RSI 80
+RSI_OVERBOUGHT_OFI_MIN = _float("RSI_OVERBOUGHT_OFI_MIN", "0.10")  # when RSI > RSI_OVERBOUGHT, allow if OFI >= this
+TECHNICAL_MIN_FOR_ENTRY = _float("TECHNICAL_MIN_FOR_ENTRY", "-0.35")  # scalp: buy when technical >= this (allow slightly bearish)
+SCALP_SKIP_MOMENTUM = _bool("SCALP_SKIP_MOMENTUM", "true")  # when true, don't require RSI/MACD momentum for entry
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------

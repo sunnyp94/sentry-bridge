@@ -258,6 +258,13 @@ def run_backtest_unified(symbols: list[str], days: int = 90, initial_cash: float
 
             # When daily target hit: no new buys (let winners run). Don't force-sell.
             daily_cap_reached = daily_target_hit
+            # Green Light only: structure from HTF (daily) bars; LTF prices = same for backtest
+            htf_closes = closes[: i + 1]
+            structure_ok_bt = None
+            if len(htf_closes) >= 50:
+                from brain.structure import trend_analyzer
+                structure_ok_bt = trend_analyzer(htf_closes).structure_ok
+            ltf_prices_bt = htf_closes
             d_dec = decide(
                 symbol,
                 sentiment=sentiment,
@@ -281,6 +288,9 @@ def run_backtest_unified(symbols: list[str], days: int = 90, initial_cash: float
                 current_price=close,
                 regime=regime,
                 spy_below_200ma=spy_below_200ma_list[i] if spy_regime_enabled else None,
+                technical_score=(ts[i] if (ts := d.get("technical_scores")) and i < len(ts) else None),
+                structure_ok=structure_ok_bt,
+                ltf_prices=ltf_prices_bt,
             )
             action = d_dec.action
             # Backtest filter: only block buy on big down days (relaxed: was mom<-0.10 or ret1d<-2%)

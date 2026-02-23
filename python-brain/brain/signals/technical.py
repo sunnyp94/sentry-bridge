@@ -1,6 +1,6 @@
 """
 Technical layer: RSI, MACD, and 3 chart patterns (double top, inverted H&S, bull/bear flag).
-Single technical_score() combines these for the composite. No other indicators.
+Single technical_score() combines these for the Green Light pattern check. No other indicators.
 """
 from typing import List, Optional, Tuple
 
@@ -222,6 +222,50 @@ def detect_inverted_head_shoulders(
     return 0.0
 
 
+def detect_head_shoulders_bearish(
+    closes: List[float],
+    lookback: int = 40,
+    tolerance_pct: float = 3.0,
+) -> float:
+    """
+    Classic (bearish) Head & Shoulders: left shoulder high, head (higher), right shoulder high, break below neckline.
+    Returns bearish score 0..-1 (or 0 if not present). Used for HTF 'pause longs'.
+    """
+    if len(closes) < lookback:
+        return 0.0
+    use = closes[-lookback:]
+    peaks, troughs = _local_extrema(use, window=2)
+    if len(peaks) < 3 or len(troughs) < 2:
+        return 0.0
+    # Three peaks: left shoulder, head, right shoulder (head = highest)
+    p_indices = peaks[-3:] if len(peaks) >= 3 else peaks
+    p_vals = [use[i] for i in p_indices]
+    head_idx = p_indices[np.argmax(p_vals)]
+    left_idx = min(p_indices)
+    right_idx = max(p_indices)
+    if head_idx == left_idx or head_idx == right_idx:
+        return 0.0
+    left_val = use[left_idx]
+    right_val = use[right_idx]
+    head_val = use[head_idx]
+    if head_val <= left_val or head_val <= right_val:
+        return 0.0
+    if left_val <= 0:
+        return 0.0
+    sh_diff_pct = abs(right_val - left_val) / left_val * 100
+    if sh_diff_pct > tolerance_pct:
+        return 0.0
+    troughs_between = [t for t in troughs if left_idx < t < right_idx]
+    if len(troughs_between) < 2:
+        return 0.0
+    neck_low = min(use[t] for t in troughs_between)
+    last_close = use[-1]
+    if last_close < neck_low:
+        break_pct = (neck_low - last_close) / neck_low * 100
+        return -max(0.0, min(1.0, break_pct / 5.0))
+    return 0.0
+
+
 def detect_flag(
     closes: List[float],
     lookback: int = 30,
@@ -321,6 +365,52 @@ def technical_score(
     n = len(components)
     score = total / n
     return max(-1.0, min(1.0, float(score)))
+
+
+# ---- Energy filters (RSI divergence, MACD zero-cross) ----
+
+def rsi_bullish_divergence(prices: List[float], period: int = 14, lookback: int = 30) -> bool:
+    """
+    Bullish divergence: price makes Lower Low but RSI makes Higher Low.
+    Requires at least 2 troughs in lookback; compares last two price troughs and their RSI values.
+    """
+    if len(prices) < lookback or lookback < period + 5:
+        return False
+    use = prices[-lookback:]
+    _, troughs = _local_extrema(use, window=2)
+    if len(troughs) < 2:
+        return False
+    t1, t2 = troughs[-2], troughs[-1]
+    if t2 <= t1:
+        return False
+    p1, p2 = use[t1], use[t2]
+    rsi_series = []
+    for i in range(period + 1, len(use)):
+        r = _rsi_from_series(use[: i + 1], period)
+        if r is not None:
+            rsi_series.append((i, r))
+    if len(rsi_series) < 2:
+        return False
+    r1 = next((r for i, r in rsi_series if i >= t1), None)
+    r2 = next((r for i, r in reversed(rsi_series) if i <= t2), None)
+    if r1 is None or r2 is None:
+        return False
+    return p2 < p1 and r2 > r1  # price lower low, RSI higher low
+
+
+def macd_histogram_above_zero(
+    prices: List[float], fast: int = 12, slow: int = 26, signal: int = 9
+) -> bool:
+    """True if MACD histogram has crossed above zero (last value > 0 and had a negative value recently)."""
+    comp = macd_components(prices, fast=fast, slow=slow, signal=signal)
+    if not comp or len(comp[2]) < 3:
+        return False
+    hist = comp[2]
+    if hist[-1] <= 0:
+        return False
+    # Crossed above: was negative in last 5 bars
+    recent = hist[-6:]
+    return any(h < 0 for h in recent[:-1])
 
 
 # Backward compatibility: expose RSI for callers that need it

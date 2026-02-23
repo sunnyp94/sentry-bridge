@@ -1,9 +1,8 @@
 """
 Signal modules: each produces a score or scores used by the strategy.
-- news_sentiment: FinBERT/VADER on news (headline + summary).
-- composite: combines News + Social (placeholder) + Momentum into composite score and consensus.
+- news_sentiment: FinBERT/VADER on news (headline + summary); used for kill switch.
+- technical: RSI + MACD + 3 patterns; used for Green Light pattern check.
 """
-from .composite import composite_score, CompositeResult  # noqa: F401
 from .technical import technical_score  # noqa: F401
 
 
@@ -13,4 +12,4 @@ def score_news(payload: dict) -> float:
     return _score_news(payload)
 
 
-__all__ = ["score_news", "composite_score", "CompositeResult", "technical_score"]
+__all__ = ["score_news", "technical_score"]

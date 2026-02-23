@@ -5,8 +5,32 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
+
+// flexFloat unmarshals from string or number (Alpaca sometimes returns decimals as strings).
+type flexFloat float64
+
+func (f *flexFloat) UnmarshalJSON(data []byte) error {
+	var v interface{}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	switch x := v.(type) {
+	case float64:
+		*f = flexFloat(x)
+	case string:
+		parsed, err := strconv.ParseFloat(x, 64)
+		if err != nil {
+			return err
+		}
+		*f = flexFloat(parsed)
+	default:
+		return fmt.Errorf("current_price: cannot unmarshal %T into float", v)
+	}
+	return nil
+}
 
 // TradingClient calls Alpaca Trading API (paper or live). Used for positions and open orders only; Python brain places buy/sell orders.
 type TradingClient struct {
@@ -55,7 +79,7 @@ type Position struct {
 	CostBasis      string  `json:"cost_basis"`
 	UnrealizedPL   string  `json:"unrealized_pl"`
 	UnrealizedPLPC string  `json:"unrealized_plpc"`
-	CurrentPrice   float64 `json:"current_price"`
+	CurrentPrice   flexFloat `json:"current_price"`
 }
 
 // GetPositions returns open positions.
