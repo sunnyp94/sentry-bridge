@@ -150,7 +150,7 @@ func runStreaming(cfg *config.Config) {
 	updateVolatility()
 
 	// Price stream (trades + quotes) — update state and push to Redis
-	priceStream := alpaca.NewPriceStream(cfg.StreamWSURL, cfg.APIKeyID, cfg.APISecretKey, "iex", cfg.Tickers)
+	priceStream := alpaca.NewPriceStream(cfg.StreamWSURL, cfg.APIKeyID, cfg.APISecretKey, cfg.DataFeed, cfg.Tickers)
 	lastPrint := make(map[string]time.Time)
 	var printMu sync.Mutex
 	priceStream.OnTrade = func(symbol string, price float64, size int, t time.Time) {

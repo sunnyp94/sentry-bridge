@@ -17,5 +17,7 @@ RUN pip install --no-cache-dir -r /app/python-brain/requirements.txt
 # Validate Python: compile all .py (syntax) and verify brain package imports (fail build on errors)
 RUN python3 -m compileall -q /app/python-brain \
     && python3 -c "import sys; sys.path.insert(0, '/app/python-brain'); from brain import config; from brain.strategy import decide; from brain.executor import place_order, get_account_equity; print('brain OK')"
-# Go starts on boot; reads BRAIN_CMD from env and launches Python brain (FinBERT + strategy)
-ENTRYPOINT ["/app/sentry-bridge"]
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+# When ACTIVE_SYMBOLS_FILE is set, entrypoint runs the scanner first, then starts Go (which reads tickers from that file).
+ENTRYPOINT ["/app/entrypoint.sh", "/app/sentry-bridge"]

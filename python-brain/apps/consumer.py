@@ -16,8 +16,9 @@ import json
 import logging
 import os
 import time
-from collections import defaultdict
-from datetime import datetime
+from collections import defaultdict, deque
+import threading
+from datetime import datetime, timedelta
 from typing import Optional
 
 _PERF = time.perf_counter
@@ -40,11 +41,106 @@ from brain.strategy import (
 )
 from brain.signals.composite import composite_score
 from brain.rules.consensus import consensus_allows_buy
-from brain.rules.daily_cap import update_equity, is_daily_cap_reached
+from brain.rules.daily_cap import update_equity, is_daily_cap_reached, should_flat_all_for_daily_target
 from brain.rules.drawdown import update_drawdown_peak, is_drawdown_halt
+from brain.market_calendar import is_full_trading_day
 from brain import config as brain_config
 
+# OFI (Order Flow Imbalance) from live trade/quote when USE_OFI=true (brain.signals.microstructure.OFITracker)
+_ofi_tracker: Optional[object] = None
+
+# Opportunity Engine: active symbols from screener (cached by file mtime)
+_active_symbols_cache: Optional[set] = None
+_active_symbols_path: Optional[str] = None
+_active_symbols_mtime: Optional[float] = None
+
+# Global filter: SPY 200-day MA (cached, refresh every 15 min)
+_spy_below_200ma: Optional[bool] = None
+_spy_regime_updated: float = 0.0
+SPY_REGIME_REFRESH_SEC = 900
+
+
+def _get_active_symbols() -> Optional[set]:
+    """When OPPORTUNITY_ENGINE_ENABLED, return set of symbols to activate (from ACTIVE_SYMBOLS_FILE). None = no filter."""
+    global _active_symbols_cache, _active_symbols_path, _active_symbols_mtime
+    if not getattr(brain_config, "OPPORTUNITY_ENGINE_ENABLED", False):
+        return None
+    path = getattr(brain_config, "ACTIVE_SYMBOLS_FILE", "").strip()
+    if not path:
+        return None
+    try:
+        st = os.stat(path)
+        if _active_symbols_path == path and _active_symbols_mtime == st.st_mtime and _active_symbols_cache is not None:
+            return _active_symbols_cache
+    except OSError:
+        return _active_symbols_cache  # keep previous if file gone
+    try:
+        with open(path) as f:
+            symbols = [line.strip().upper() for line in f if line.strip()]
+        _active_symbols_cache = set(symbols)
+        _active_symbols_path = path
+        _active_symbols_mtime = os.stat(path).st_mtime
+        return _active_symbols_cache
+    except OSError:
+        _active_symbols_cache = set()
+        _active_symbols_path = path
+        _active_symbols_mtime = None
+        return _active_symbols_cache
+
+
+def _get_ofi_tracker():
+    global _ofi_tracker
+    if _ofi_tracker is None and getattr(brain_config, "USE_OFI", False):
+        from brain.signals.microstructure import OFITracker
+        _ofi_tracker = OFITracker(window_trades=getattr(brain_config, "OFI_WINDOW_TRADES", 100))
+    return _ofi_tracker
+
+
+def _get_spy_below_200ma() -> Optional[bool]:
+    """When SPY_200MA_REGIME_ENABLED, return True if SPY is below its 200-day MA (risk-off). Cached, refresh every 15 min."""
+    if not getattr(brain_config, "SPY_200MA_REGIME_ENABLED", False):
+        return None
+    global _spy_below_200ma, _spy_regime_updated
+    now = time.time()
+    if _spy_below_200ma is None or (now - _spy_regime_updated) > SPY_REGIME_REFRESH_SEC:
+        try:
+            from brain.data import get_spy_200ma_regime
+            r = get_spy_200ma_regime()
+            _spy_below_200ma = not r.get("above_200ma", True)
+            _spy_regime_updated = now
+        except Exception:
+            _spy_below_200ma = False
+    return _spy_below_200ma
+
+
 log = logging.getLogger("brain")
+
+
+def _trend_ok(sym: str) -> Optional[bool]:
+    """When TREND_FILTER_ENABLED, True if price > SMA(TREND_SMA_PERIOD). Else None (no filter)."""
+    if not getattr(brain_config, "TREND_FILTER_ENABLED", False):
+        return None
+    period = getattr(brain_config, "TREND_SMA_PERIOD", 20)
+    prices = list(price_history_by_symbol.get(sym, []))
+    if len(prices) < period:
+        return None
+    sma = sum(prices[-period:]) / period
+    return prices[-1] > sma
+
+
+def _vol_ok(sym: str) -> Optional[bool]:
+    """When VOL_MAX_FOR_ENTRY > 0, True if annualized_vol_30d <= vol_max (no new buy when vol too high). Else None."""
+    vol_max = getattr(brain_config, "VOL_MAX_FOR_ENTRY", 0)
+    if vol_max <= 0:
+        return None
+    combined = last_payload_by_symbol.get(sym, {})
+    vol = combined.get("annualized_vol_30d")
+    if vol is None:
+        return None
+    try:
+        return float(vol) <= vol_max
+    except (TypeError, ValueError):
+        return None
 
 
 def format_ts(ts: str) -> str:
@@ -96,9 +192,15 @@ sentiment_by_symbol: dict[str, float] = defaultdict(float)
 last_payload_by_symbol: dict[str, dict] = {}
 positions_qty: dict[str, int] = {}
 position_unrealized_pl_pct: dict[str, float] = {}
+position_entry_price: dict[str, float] = {}
+position_current_price: dict[str, float] = {}
+# Scale-out: levels (e.g. 0.01, 0.02, 0.03) already hit per symbol
+_scale_out_done: dict[str, set] = {}
 session_by_symbol: dict[str, str] = defaultdict(lambda: "regular")
 ORDER_COOLDOWN_SEC = 60
 last_order_time_by_symbol: dict[str, float] = {}
+# Rolling price history per symbol for RSI/technical (when USE_TECHNICAL_INDICATORS=true)
+price_history_by_symbol: dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
 # Cached equity from last positions event (avoids extra Alpaca call when sizing a buy)
 _last_equity: Optional[float] = None
 
@@ -129,7 +231,7 @@ def _get_price(symbol: str) -> Optional[float]:
 
 
 def _try_place_order(d: Decision, skip_cooldown: bool = False) -> bool:
-    """If decision is buy/sell with qty, respect cooldown (unless skip_cooldown e.g. flat_by_close), apply position sizing (buy), and place order. Returns True if placed."""
+    """If decision is buy/sell with qty, respect cooldown (unless skip_cooldown e.g. daily_target_hit), apply position sizing (buy), and place order. Returns True if placed."""
     global _last_equity
     if d.action not in ("buy", "sell") or d.qty <= 0:
         return False
@@ -141,26 +243,70 @@ def _try_place_order(d: Decision, skip_cooldown: bool = False) -> bool:
         return False
     from brain.executor import place_order, get_account_equity
     price = _get_price(d.symbol)
-    # Position sizing: buy qty from % of equity when POSITION_SIZE_PCT > 0 (use cached equity from last positions event to avoid extra API call)
-    if d.action == "buy" and brain_config.POSITION_SIZE_PCT > 0 and price and price > 0:
+    # Pillar 1: position sizing — risk-based when RISK_PCT_PER_TRADE > 0 and ATR available, else POSITION_SIZE_PCT
+    if d.action == "buy" and price and price > 0:
         equity = _last_equity
         if equity is None or equity <= 0:
             equity = get_account_equity()
             if equity is not None:
                 _last_equity = equity
         if equity and equity > 0:
-            qty = int((equity * brain_config.POSITION_SIZE_PCT) / price)
-            qty = max(1, min(qty, brain_config.STRATEGY_MAX_QTY))
+            risk_pct = getattr(brain_config, "RISK_PCT_PER_TRADE", 0)
+            atr = getattr(d, "atr", None)  # optional: set by caller when available (e.g. from bars)
+            if risk_pct > 0 and atr is not None and atr > 0:
+                from brain import sizing as brain_sizing
+                atr_mult = getattr(brain_config, "ATR_STOP_MULTIPLE", 2.0)
+                qty = brain_sizing.position_size_shares(equity, price, atr=atr, atr_stop_multiple=atr_mult, max_qty=brain_config.STRATEGY_MAX_QTY)
+            else:
+                pct = getattr(brain_config, "POSITION_SIZE_PCT", 0.01)
+                qty = int((equity * pct) / price) if pct > 0 else 1
+                qty = max(1, min(qty, brain_config.STRATEGY_MAX_QTY))
+            # Global filter: when SPY below 200 MA, reduce long size
+            if d.action == "buy" and getattr(brain_config, "SPY_200MA_REGIME_ENABLED", False) and _get_spy_below_200ma() is True:
+                mult = getattr(brain_config, "SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER", 0.5)
+                qty = max(1, int(qty * mult))
             d = Decision(d.action, d.symbol, qty, d.reason)
-            log.info("position_size equity=%.2f pct=%.2f%% price=%.2f -> qty=%d", equity, brain_config.POSITION_SIZE_PCT * 100, price, qty)
+            log.info("position_size equity=%.2f price=%.2f -> qty=%d", equity, price, qty)
     if place_order(d, current_price=price):
         last_order_time_by_symbol[d.symbol] = now
         return True
     return False
 
 
+def _run_scale_out_check() -> None:
+    """Scale-out: sell 25% at 1%, 2%, 3% (let runner ride)."""
+    if not getattr(brain_config, "SCALE_OUT_ENABLED", False):
+        return
+    try:
+        levels_pct = [float(x.strip()) / 100.0 for x in (getattr(brain_config, "SCALE_OUT_LEVELS_PCT", "1,2,3") or "1,2,3").split(",")]
+    except Exception:
+        levels_pct = [0.01, 0.02, 0.03]
+    scale_pct = getattr(brain_config, "SCALE_OUT_PCT_PER_LEVEL", 25) / 100.0
+    for sym, pl_pct in position_unrealized_pl_pct.items():
+        if pl_pct is None or pl_pct < 0:
+            continue
+        pos_qty = positions_qty.get(sym, 0)
+        try:
+            pos_qty = int(pos_qty)
+        except (TypeError, ValueError):
+            pos_qty = 0
+        if pos_qty <= 0:
+            continue
+        done = _scale_out_done.setdefault(sym, set())
+        for level in levels_pct:
+            if pl_pct >= level and level not in done:
+                sell_qty = max(1, int(pos_qty * scale_pct))
+                sell_qty = min(sell_qty, pos_qty)
+                d = Decision("sell", sym, sell_qty, f"scale_out_{int(level*100)}pct")
+                log.info("scale_out symbol=%s pl_pct=%.2f%% sell qty=%d", sym, pl_pct * 100, sell_qty)
+                _try_place_order(d, skip_cooldown=True)
+                done.add(level)
+                break
+
+
 def run_stop_loss_check() -> None:
-    """On positions update: sell any position at or below 5% loss (STOP_LOSS_PCT)."""
+    """On positions update: sell any position at or below stop (ATR or STOP_LOSS_PCT)."""
+    _run_scale_out_check()
     stop_decimal = STOP_LOSS_PCT / 100.0
     for sym, pl_pct in position_unrealized_pl_pct.items():
         if pl_pct is None or pl_pct > -stop_decimal:
@@ -179,33 +325,56 @@ def run_stop_loss_check() -> None:
         prob = probability_gain(combined)
         sent_ema = get_sentiment_ema(sym)
         sess = session_by_symbol.get(sym, "regular")
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=True, daily_cap_reached=is_daily_cap_reached())
+        cur_price = position_current_price.get(sym) or combined.get("price") or combined.get("mid")
+        try:
+            cur_price = float(cur_price) if cur_price is not None else None
+        except (TypeError, ValueError):
+            cur_price = None
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=True, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma())
         if d.action == "sell" and d.qty > 0:
             log.warning("stop_loss symbol=%s pl_pct=%.2f%% sell qty=%d reason=%s", d.symbol, pl_pct * 100, d.qty, d.reason)
             _try_place_order(d)
 
 
-def _is_in_flat_by_close_window() -> bool:
-    """True if we're in the closing window (weekday ET >= FLAT_BY_CLOSE_START_ET) so we should sell to be flat by 4pm."""
-    if not brain_config.FLAT_BY_CLOSE_ENABLED or not brain_config.FLAT_BY_CLOSE_START_ET or ZoneInfo is None:
+def _is_in_closing_window() -> bool:
+    """True if we're in the closing window (weekday ET >= CLOSE_LOSSES_BY_ET) for overnight-carry: close only losers."""
+    if not getattr(brain_config, "OVERNIGHT_CARRY_ENABLED", False):
+        return False
+    start_et = getattr(brain_config, "CLOSE_LOSSES_BY_ET", "").strip()
+    if not start_et or ZoneInfo is None:
         return False
     try:
         et = datetime.now(ZoneInfo("America/New_York"))
-        if et.weekday() > 4:  # Saturday=5, Sunday=6
+        if et.weekday() > 4:
             return False
-        parts = brain_config.FLAT_BY_CLOSE_START_ET.strip().split(":")
+        parts = start_et.strip().split(":")
         if len(parts) != 2:
             return False
-        start_h = int(parts[0])
-        start_m = int(parts[1])
+        start_h, start_m = int(parts[0]), int(parts[1])
         return (et.hour > start_h) or (et.hour == start_h and et.minute >= start_m)
     except Exception:
         return False
 
 
-def run_flat_by_close() -> None:
-    """If in closing window (e.g. from 3:50pm ET), close all positions (sell longs, buy to cover shorts) so we're flat by 4pm market close."""
-    if not _is_in_flat_by_close_window():
+def run_close_losses_before_close() -> None:
+    """Overnight carry: in closing window, close only positions that are in loss; let winners run (trailing ATR handles exit)."""
+    if not _is_in_closing_window():
+        return
+    for sym, qty in list(positions_qty.items()):
+        if qty <= 0:
+            continue
+        pl_pct = position_unrealized_pl_pct.get(sym)
+        if pl_pct is None or pl_pct >= 0:
+            continue
+        size = min(abs(qty), brain_config.STRATEGY_MAX_QTY)
+        d = Decision("sell", sym, size, "close_loss_before_close")
+        log.info("close_loss_before_close symbol=%s pl_pct=%.2f%% qty=%d (overnight carry winners)", sym, pl_pct * 100, d.qty)
+        _try_place_order(d, skip_cooldown=True)
+
+
+def run_flat_when_daily_target() -> None:
+    """When daily PnL >= target and FLAT_WHEN_DAILY_TARGET_HIT: close all positions (profit daily and stop)."""
+    if not should_flat_all_for_daily_target():
         return
     for sym, qty in list(positions_qty.items()):
         try:
@@ -216,10 +385,10 @@ def run_flat_by_close() -> None:
             continue
         size = min(abs(q), brain_config.STRATEGY_MAX_QTY)
         if q > 0:
-            d = Decision("sell", sym, size, "flat_by_close")
+            d = Decision("sell", sym, size, "daily_target_hit")
         else:
-            d = Decision("buy", sym, size, "flat_by_close")
-        log.info("flat_by_close symbol=%s qty=%d (close by 4pm ET)", sym, d.qty)
+            d = Decision("buy", sym, size, "daily_target_hit")
+        log.info("daily_target_hit symbol=%s qty=%d (flat all, stop for the day)", sym, d.qty)
         _try_place_order(d, skip_cooldown=True)
 
 
@@ -227,8 +396,16 @@ def run_strategy_on_news(payload: dict) -> None:
     symbols = payload.get("symbols") or []
     if not symbols:
         return
+    # Opportunity Engine: only activate for screener's top N symbols today
+    active = _get_active_symbols()
+    if active is not None:
+        symbols = [s for s in symbols if s in active]
+        if not symbols:
+            log.debug("news symbols none in active set; skipping strategy")
+            return
+        log.debug("opportunity_engine active_symbols=%s news_filtered=%s", len(active), symbols)
     t0 = _PERF()
-    composite_result = composite_score(news_payload=payload, symbol_payload=None, social_score=None)
+    composite_result = composite_score(news_payload=payload, symbol_payload=None, social_score=None, price_series=None)
     raw_news = composite_result.sources["news"]
     set_kill_switch_from_news(raw_news)
     consensus_ok = consensus_allows_buy(composite_result)
@@ -241,7 +418,8 @@ def run_strategy_on_news(payload: dict) -> None:
         combined.setdefault("return_1m", 0)
         combined.setdefault("return_5m", 0)
         combined.setdefault("annualized_vol_30d", 0)
-        cr_sym = composite_score(news_payload=payload, symbol_payload=combined, social_score=None)
+        price_series = list(price_history_by_symbol[sym]) if brain_config.USE_TECHNICAL_INDICATORS else None
+        cr_sym = composite_score(news_payload=payload, symbol_payload=combined, social_score=None, price_series=price_series)
         sentiment_by_symbol[sym] = cr_sym.composite
         sent_ema = update_and_get_sentiment_ema(sym, cr_sym.composite)
         prob = probability_gain(combined)
@@ -252,7 +430,12 @@ def run_strategy_on_news(payload: dict) -> None:
             pos_qty = 0
         sess = session_by_symbol.get(sym, "regular")
         pl_pct = position_unrealized_pl_pct.get(sym)
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=consensus_ok, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt)
+        cur_price = position_current_price.get(sym) or combined.get("price") or combined.get("mid")
+        try:
+            cur_price = float(cur_price) if cur_price is not None else None
+        except (TypeError, ValueError):
+            cur_price = None
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=consensus_ok, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma())
         log.info(
             "strategy symbol=%s sources=%s sentiment_ema=%.2f prob_gain=%.2f consensus_ok=%s -> action=%s qty=%d reason=%s",
             d.symbol, cr_sym.sources, sent_ema, prob, consensus_ok, d.action, d.qty, d.reason,
@@ -270,15 +453,37 @@ def handle_event(ev: dict) -> None:
     if typ == "trade":
         sym = payload.get("symbol")
         if sym:
+            tracker = _get_ofi_tracker()
+            if tracker is not None:
+                p = payload.get("price")
+                size = payload.get("size") or 0
+                try:
+                    size = int(size)
+                except (TypeError, ValueError):
+                    size = 0
+                if p is not None and isinstance(p, (int, float)) and p > 0 and size > 0:
+                    prev = last_payload_by_symbol.get(sym, {})
+                    ofi = tracker.update_trade(sym, float(p), size, bid=prev.get("bid"), ask=prev.get("ask"))
+                    if ofi is not None:
+                        payload = {**payload, "ofi": ofi}
             last_payload_by_symbol[sym] = {**last_payload_by_symbol.get(sym, {}), **payload}
             session_by_symbol[sym] = payload.get("session") or "regular"
             set_kill_switch_from_returns(payload.get("return_1m"), payload.get("return_5m"))
+            p = payload.get("price")
+            if p is not None and isinstance(p, (int, float)) and p > 0:
+                price_history_by_symbol[sym].append(float(p))
     elif typ == "quote":
         sym = payload.get("symbol")
         if sym:
+            tracker = _get_ofi_tracker()
+            if tracker is not None:
+                tracker.update_quote(sym, payload.get("bid"), payload.get("ask"))
             last_payload_by_symbol[sym] = {**last_payload_by_symbol.get(sym, {}), **payload}
             session_by_symbol[sym] = payload.get("session") or "regular"
             set_kill_switch_from_returns(payload.get("return_1m"), payload.get("return_5m"))
+            mid = payload.get("mid")
+            if mid is not None and isinstance(mid, (int, float)) and mid > 0:
+                price_history_by_symbol[sym].append(float(mid))
     elif typ == "volatility":
         sym = payload.get("symbol")
         if sym:
@@ -287,6 +492,8 @@ def handle_event(ev: dict) -> None:
         global _last_equity
         positions_qty.clear()
         position_unrealized_pl_pct.clear()
+        position_entry_price.clear()
+        position_current_price.clear()
         for p in payload.get("positions") or []:
             sym = p.get("symbol")
             if not sym:
@@ -303,6 +510,19 @@ def handle_event(ev: dict) -> None:
             plpc = _parse_unrealized_plpc(p.get("unrealized_plpc"))
             if plpc is not None:
                 position_unrealized_pl_pct[sym] = plpc
+            if qty > 0:
+                try:
+                    cb = float(p.get("cost_basis") or 0)
+                    if cb > 0:
+                        position_entry_price[sym] = cb / qty
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    cp = float(p.get("current_price") or 0)
+                    if cp > 0:
+                        position_current_price[sym] = cp
+                except (TypeError, ValueError):
+                    pass
         get_equity_ms = 0.0
         try:
             from brain.executor import get_account_equity
@@ -317,16 +537,111 @@ def handle_event(ev: dict) -> None:
             pass
         t1 = _PERF()
         run_stop_loss_check()
-        run_flat_by_close()
+        run_flat_when_daily_target()
+        run_close_losses_before_close()
         stop_loss_ms = (_PERF() - t1) * 1000
         log.info("latency step=positions get_equity_ms=%.1f stop_loss_ms=%.1f", get_equity_ms, stop_loss_ms)
     elif typ == "news":
         run_strategy_on_news(payload)
 
 
+def _run_scanner_at_startup() -> None:
+    """Run the stock scanner once to refresh the daily opportunity pool (startup or 8am ET)."""
+    path = getattr(brain_config, "ACTIVE_SYMBOLS_FILE", "").strip()
+    if not path:
+        return
+    import subprocess
+    # Repo root (sentry-bridge or /app in Docker) so paths like data/active_symbols.txt resolve correctly
+    root = Path(__file__).resolve().parent.parent.parent
+    script = root / "python-brain" / "apps" / "run_screener.py"
+    if not script.exists():
+        script = root / "apps" / "run_screener.py"
+    if not script.exists():
+        log.warning("run_screener.py not found at %s; skip scan", script)
+        return
+    try:
+        log.info("running scanner to refresh opportunity pool -> %s", path)
+        out_path = Path(path)
+        if not out_path.is_absolute():
+            out_path = root / path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            [sys.executable, str(script), "--out", str(out_path)],
+            cwd=str(root),
+            env=os.environ,
+            timeout=300,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            log.info("scanner finished; opportunity pool written to %s", path)
+        else:
+            log.warning("scanner exited %s: %s", result.returncode, (result.stderr or result.stdout or "")[:500])
+    except subprocess.TimeoutExpired:
+        log.warning("scanner timed out after 300s")
+    except Exception as e:
+        log.warning("scanner failed: %s", e)
+
+
+def _parse_run_at_et(s: str) -> Optional[tuple]:
+    """Parse SCREENER_RUN_AT_ET (e.g. '08:00' or '8:00') -> (hour, minute) or None."""
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        parts = s.split(":")
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return (hour, minute)
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+def _scheduler_loop() -> None:
+    """Background loop: at SCREENER_RUN_AT_ET (e.g. 8am ET) on full trading days, run the scanner."""
+    run_at = getattr(brain_config, "SCREENER_RUN_AT_ET", "").strip()
+    parsed = _parse_run_at_et(run_at)
+    if not parsed or not ZoneInfo:
+        log.warning("scanner scheduler disabled: SCREENER_RUN_AT_ET=%r or no zoneinfo", run_at)
+        return
+    hour, minute = parsed
+    et = ZoneInfo("America/New_York")
+    log.info("scanner scheduler started; will run at %02d:%02d ET on full trading days", hour, minute)
+    while True:
+        now_et = datetime.now(et)
+        today_run = now_et.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now_et >= today_run:
+            next_run = today_run + timedelta(days=1)
+        else:
+            next_run = today_run
+        sleep_secs = (next_run - now_et).total_seconds()
+        if sleep_secs > 0:
+            log.debug("scanner next run at %s ET (in %.0fs)", next_run, sleep_secs)
+            time.sleep(sleep_secs)
+        run_date = next_run.date()
+        if is_full_trading_day(run_date):
+            _run_scanner_at_startup()
+        else:
+            log.info("skip scanner: %s is not a full trading day", run_date)
+
+
 def main() -> None:
     from brain.log_config import init as init_logging
     init_logging()
+
+    # Opportunity engine: run scanner at startup and, when SCREENER_RUN_AT_ET set, also at that time (e.g. 8am ET) on full trading days.
+    if getattr(brain_config, "OPPORTUNITY_ENGINE_ENABLED", False):
+        path = getattr(brain_config, "ACTIVE_SYMBOLS_FILE", "").strip()
+        run_at_et = getattr(brain_config, "SCREENER_RUN_AT_ET", "").strip()
+        if path:
+            _run_scanner_at_startup()
+        if path and run_at_et and _parse_run_at_et(run_at_et):
+            t = threading.Thread(target=_scheduler_loop, daemon=True)
+            t.start()
+        active = _get_active_symbols()
+        log.info("opportunity_engine enabled; active_symbols from %s: %s", path or "(no file)", list(active)[:20] if active else [])
 
     log.info("reading from stdin (NDJSON)")
     if os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY_ID"):

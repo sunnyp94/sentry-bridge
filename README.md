@@ -27,7 +27,8 @@ Go engine that pulls **market news**, **price**, and **volatility** from Alpaca 
 
    Optional:
 
-   - `TICKERS` – comma-separated symbols (default: `AAPL,MSFT,GOOGL,AMZN,TSLA`)  
+   - `TICKERS` – comma-separated symbols (fallback when not using the scanner)  
+   - **Daily opportunity pool:** Set `SCREENER_UNIVERSE` (e.g. `lab_12`, `sp400`, `nasdaq100`), `ACTIVE_SYMBOLS_FILE=data/active_symbols.txt`, and `OPPORTUNITY_ENGINE_ENABLED=true`; the scanner runs automatically before the trading day (no static stock list needed).  
    - `ALPACA_DATA_BASE_URL` – REST data API (default `https://data.alpaca.markets`)  
    - `STREAM` – set to `false` or `0` for one-shot REST only; default is streaming mode  
    - `REDIS_URL` – Redis address for Python brain (e.g. `redis://localhost:6379`); if unset, events are not published  
@@ -255,8 +256,6 @@ The brain decides when to buy or sell using:
    # 0.2% daily shutdown: no new buys when daily PnL >= 0.2% (lock in gains)
    DAILY_CAP_ENABLED=true
    DAILY_CAP_PCT=0.2
-   # No new buys in first 15 min after market open (9:30–9:44 AM ET); sells (e.g. stop loss) still allowed
-   NO_TRADE_FIRST_MINUTES_AFTER_OPEN=15
    # Kill switch: blocks all new buys when triggered (sticky until restart)
    KILL_SWITCH=false              # set true to disable buys manually
    KILL_SWITCH_SENTIMENT_THRESHOLD=-0.50   # bad news: trigger if headline+summary sentiment <= this
@@ -289,7 +288,7 @@ The Python brain is split so you can add or change business rules without rewrit
 | **config.py** | All thresholds and flags from env (e.g. `CONSENSUS_MIN_SOURCES_POSITIVE`, `DAILY_CAP_PCT`). |
 | **signals/** | **news_sentiment** = FinBERT/VADER on news. **composite** = News + Social (placeholder) + Momentum and consensus. |
 | **rules/** | **consensus** = allow buy only when enough sources positive. **daily_cap** = block new buys when daily PnL ≥ 0.2%. |
-| **strategy.py** | Orchestrates: applies rules (kill switch, daily cap, opening window, consensus, stop loss) and returns buy/sell/hold. |
+| **strategy.py** | Orchestrates: applies rules (kill switch, daily cap, session, consensus, stop loss) and returns buy/sell/hold. |
 | **apps/consumer.py** | Stdin entry: reads events, updates state, calls composite + strategy + executor. |
 | **apps/redis_consumer.py** | Redis entry: reads stream `market:updates` (test pipeline or second consumer). |
 | **apps/test_paper_order.py** | One-off: submit 1 paper BUY to verify Alpaca API. |

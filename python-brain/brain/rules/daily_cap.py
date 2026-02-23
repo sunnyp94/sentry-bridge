@@ -39,15 +39,47 @@ def update_equity(equity: float) -> None:
 
 def is_daily_cap_reached() -> bool:
     """
-    True if daily PnL >= DAILY_CAP_PCT (e.g. 0.2%) and we should stop new buys.
+    True if we should stop new buys for the day:
+    - daily PnL >= DAILY_CAP_PCT / DAILY_PROFIT_TARGET_PCT (lock in gains), or
+    - daily PnL <= -DAILY_LOSS_CAP_PCT (daily loss cap; pro rule).
     Sells (e.g. stop loss) still allowed. Requires update_equity() to be called with current equity.
     """
-    if not config.DAILY_CAP_ENABLED or config.DAILY_CAP_PCT <= 0:
-        return False
     if _start_equity is None or _current_equity is None or _start_equity <= 0:
         return False
     pct = (_current_equity - _start_equity) / _start_equity
-    if pct >= config.DAILY_CAP_PCT / 100.0:
-        log.info("daily_cap reached: pnl_pct=%.2f%% >= %.2f%% (lock in gains, no new buys)", pct * 100, config.DAILY_CAP_PCT)
+
+    # Daily loss cap and circuit breaker: no new buys when down too much for the day (death-spiral protection)
+    loss_cap = getattr(config, "DAILY_LOSS_CAP_PCT", 0)
+    circuit_breaker = getattr(config, "DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT", 5.0)
+    loss_thresh = max(loss_cap, circuit_breaker) if loss_cap > 0 else circuit_breaker
+    if loss_thresh > 0 and pct <= -loss_thresh / 100.0:
+        log.info("daily_loss_cap/circuit_breaker: pnl_pct=%.2f%% <= -%.2f%% (pause all trading)", pct * 100, loss_thresh)
+        return True
+
+    # Daily gain cap: lock in gains (no new buys when we've hit target)
+    target_pct = getattr(config, "DAILY_PROFIT_TARGET_PCT", config.DAILY_CAP_PCT)
+    if not config.DAILY_CAP_ENABLED or target_pct <= 0:
+        return False
+    if pct >= target_pct / 100.0:
+        log.info("daily_cap reached: pnl_pct=%.2f%% >= %.2f%% (lock in gains, no new buys)", pct * 100, target_pct)
+        return True
+    return False
+
+
+def should_flat_all_for_daily_target() -> bool:
+    """
+    True when daily PnL >= DAILY_PROFIT_TARGET_PCT and FLAT_WHEN_DAILY_TARGET_HIT is set.
+    Consumer should close all positions when this is True (profit daily and stop).
+    """
+    if _start_equity is None or _current_equity is None or _start_equity <= 0:
+        return False
+    if not getattr(config, "FLAT_WHEN_DAILY_TARGET_HIT", False):
+        return False
+    target_pct = getattr(config, "DAILY_PROFIT_TARGET_PCT", 0.1)
+    if target_pct <= 0:
+        return False
+    pct = (_current_equity - _start_equity) / _start_equity
+    if pct >= target_pct / 100.0:
+        log.info("daily_target hit: pnl_pct=%.2f%% >= %.2f%% (flat all, stop for the day)", pct * 100, target_pct)
         return True
     return False

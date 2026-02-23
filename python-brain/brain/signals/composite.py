@@ -1,13 +1,12 @@
 """
-Composite score: combines News (FinBERT/VADER) + Social (placeholder) + Momentum (return_1m/5m).
-Consensus_ok = True only when at least CONSENSUS_MIN_SOURCES_POSITIVE sources are >= threshold,
-so a single sensational headline doesn't drive buys; if News is positive but Social is "meh", stay cash.
+Composite score: News + Social (placeholder) + Momentum + Technical (RSI + MACD + 3 patterns).
+Technical = RSI, MACD, double top / inverted H&S / bull-bear flag only. No other indicators.
+Consensus_ok when >= CONSENSUS_MIN_SOURCES_POSITIVE sources are >= threshold.
 """
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from .. import config
-from .news_sentiment import score_news
 
 
 @dataclass
@@ -37,11 +36,12 @@ def composite_score(
     news_payload: Optional[dict] = None,
     symbol_payload: Optional[dict] = None,
     social_score: Optional[float] = None,
+    price_series: Optional[List[float]] = None,
 ) -> CompositeResult:
     """
-    Build composite from News + Social (optional) + Momentum (from market payload).
+    Build composite from News + Social (optional) + Momentum + optional Technical (RSI).
     consensus_ok = at least CONSENSUS_MIN_SOURCES_POSITIVE sources are >= CONSENSUS_POSITIVE_THRESHOLD.
-    Social is placeholder (no data yet): pass None -> treated as 0 = "meh".
+    When USE_TECHNICAL_INDICATORS=true, pass price_series (recent closes/mids) for RSI-based technical source.
     """
     thresh = config.CONSENSUS_POSITIVE_THRESHOLD
     min_positive = config.CONSENSUS_MIN_SOURCES_POSITIVE
@@ -49,13 +49,14 @@ def composite_score(
 
     sources: Dict[str, float] = {}
 
-    # 1) News
+    # 1) News (lazy-import so backtest can use technical without loading FinBERT)
     if news_payload:
+        from .news_sentiment import score_news
         sources["news"] = score_news(news_payload)
     else:
         sources["news"] = 0.0
 
-    # 2) Social (placeholder: no feed yet; plug Twitter/Reddit later)
+    # 2) Social (placeholder)
     if social_score is not None:
         sources["social"] = social_score
     else:
@@ -66,6 +67,23 @@ def composite_score(
         sources["momentum"] = _momentum_score(symbol_payload)
     else:
         sources["momentum"] = 0.0
+
+    # 4) Technical (RSI + MACD + 3 patterns) when enabled
+    if config.USE_TECHNICAL_INDICATORS and price_series:
+        from .technical import technical_score
+        tech = technical_score(
+            price_series,
+            rsi_period=config.RSI_PERIOD,
+            use_macd=getattr(config, "USE_MACD", True),
+            macd_fast=getattr(config, "MACD_FAST", 12),
+            macd_slow=getattr(config, "MACD_SLOW", 26),
+            macd_signal=getattr(config, "MACD_SIGNAL", 9),
+            use_patterns=getattr(config, "USE_PATTERNS", True),
+            pattern_lookback=getattr(config, "PATTERN_LOOKBACK", 40),
+        )
+        sources["technical"] = tech if tech is not None else 0.0
+    else:
+        sources["technical"] = 0.0
 
     # Composite = simple average of available sources
     n = len(sources)

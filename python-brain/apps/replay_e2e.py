@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 # Optional: use TICKERS from env so replay matches your config (default AAPL for minimal test)
 def _tickers():
     import os
-    t = os.environ.get("TICKERS", "AAPL,MSFT,GOOGL,AMZN,TSLA")
+    t = os.environ.get("TICKERS", "CRWD,SNOW,DDOG,NET,MDB,DECK,POOL,SOFI,XPO,HIMS,FIVE,ZS")
     return [s.strip() for s in t.split(",") if s.strip()]
 
 
