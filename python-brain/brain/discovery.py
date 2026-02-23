@@ -149,7 +149,7 @@ class DiscoveryEngine:
             log.warning("discovery: zoneinfo not available; cannot run ET loop")
             return
         et = ZoneInfo("America/New_York")
-        log.info("discovery: loop started (every %ds from %02d:%02d to %02d:%02d ET on full trading days)",
+        log.info("discovery: loop started (every %d min from %02d:%02d to %02d:%02d ET on full trading days)",
                  self.interval_sec // 60, self.start_et[0], self.start_et[1], self.end_et[0], self.end_et[1])
         while not self._stop:
             now = datetime.now(et)
