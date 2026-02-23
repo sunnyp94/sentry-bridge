@@ -20,6 +20,9 @@ services:
     depends_on:
       - redis
     restart: unless-stopped
+    volumes:
+      # Persist data/ (active_symbols.txt, app.log) on host so you can tail data/app.log
+      - ./data:/app/data
 
 volumes:
   redis_data:

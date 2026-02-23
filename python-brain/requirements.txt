@@ -1,6 +1,7 @@
 redis>=5.0.0
 vaderSentiment>=3.3.2
 alpaca-py>=0.25.0
+pytz
 # FinBERT (finance-trained transformer) for smarter buy/sell sentiment
 transformers>=4.30.0
 torch>=2.0.0

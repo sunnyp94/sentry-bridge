@@ -10,7 +10,7 @@ import pandas as pd
 from brain.signals.microstructure import returns_zscore_from_prices
 
 
-# Default lab universe (12 names for testing); scale later to Russell 2000 or top 500 liquid.
+# Lab universe (12 names for quick tests). Production: use r2000_sp500_nasdaq100, russell2000, sp500, nasdaq100 (symbol files in data/).
 LAB_12 = [
     "CRWD", "SNOW", "DDOG", "NET", "MDB", "DECK", "POOL", "SOFI",
     "XPO", "HIMS", "FIVE", "ZS",
@@ -20,13 +20,16 @@ LAB_12 = [
 def get_universe(name: str) -> List[str]:
     """
     Resolve universe name to list of symbols.
-    - "lab_12": default 12-ticker testing lab.
+    - "lab_12": 12-ticker testing lab.
+    - "russell2000" / "r2000": Russell 2000 (file data/r2000.txt — FTSE Russell / broker).
+    - "sp500" / "snp500": S&P 500 (file data/sp500.txt — S&P or broker).
+    - "sp400": S&P MidCap 400 (file data/sp400.txt).
+    - "nasdaq100": Nasdaq 100 (file data/nasdaq100.txt — high liquidity).
+    - "r2000_sp500_nasdaq100": Combined Russell 2000 + S&P 500 + Nasdaq 100 (deduped); default for production.
     - "env": TICKERS from environment (comma-separated).
     - "alpaca_equity": all active tradeable US equities from Alpaca (large; use with chunked bars).
     - "alpaca_equity_500": first 500 symbols from Alpaca (faster full-market scan).
-    - "sp400": S&P MidCap 400 (file data/sp400.txt — add symbols from S&P or broker).
-    - "nasdaq100": Nasdaq 100 (file data/nasdaq100.txt — high liquidity, avoids mega-cap-only).
-    - "file:path/to/symbols.txt": one symbol per line (e.g. Russell 2000 list).
+    - "file:path/to/symbols.txt": one symbol per line.
     - Otherwise treated as comma-separated list (e.g. "AAPL,TSLA,GOOGL").
     """
     import os
@@ -34,13 +37,31 @@ def get_universe(name: str) -> List[str]:
 
     if name == "lab_12":
         return list(LAB_12)
-    if name == "env":
-        raw = os.environ.get("TICKERS", "").strip()
-        return [s.strip().upper() for s in raw.split(",") if s.strip()]
+    if name == "russell2000" or name == "r2000":
+        return get_universe("file:data/r2000.txt")
+    if name == "sp500" or name == "snp500":
+        return get_universe("file:data/sp500.txt")
     if name == "sp400":
         return get_universe("file:data/sp400.txt")
     if name == "nasdaq100":
         return get_universe("file:data/nasdaq100.txt")
+    if name == "r2000_sp500_nasdaq100":
+        # Merge all three lists, one pass, no duplicates (same symbol in multiple indices appears once).
+        seen: set = set()
+        out: List[str] = []
+        for sym in (
+            get_universe("file:data/r2000.txt")
+            + get_universe("file:data/sp500.txt")
+            + get_universe("file:data/nasdaq100.txt")
+        ):
+            s = sym.strip().upper()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out
+    if name == "env":
+        raw = os.environ.get("TICKERS", "").strip()
+        return [s.strip().upper() for s in raw.split(",") if s.strip()]
     if name == "alpaca_equity":
         from brain.data import get_tradeable_symbols_from_alpaca
         return get_tradeable_symbols_from_alpaca(limit=None)
@@ -98,22 +119,29 @@ def score_universe(
     info_dict has: z_score, vol_ratio, ofi (if provided), score, reason.
     """
     volume_mult = 1.0 + volume_spike_pct / 100.0  # e.g. 1.15 for 15% spike
+    min_bars = max(z_period + 1, volume_avg_days + 1)  # default 21
     candidates: List[Tuple[str, Dict[str, Any]]] = []
 
     for symbol, df in bars_by_sym.items():
-        if df is None or len(df) < max(z_period + 1, volume_avg_days + 1):
+        if df is None or len(df) < 10:
             continue
         df = df.sort_index() if hasattr(df.index, "sort_values") else df
         closes, vols = _ensure_close_volume(df)
         if not closes or not vols:
             continue
+        n_bars = len(closes)
+        # Use shorter period when we have fewer than 21 bars (e.g. 22 calendar days → ~15 trading days)
+        use_z_period = z_period if n_bars >= min_bars else min(9, n_bars - 1)
+        use_vol_days = volume_avg_days if n_bars >= min_bars else min(9, n_bars - 1)
+        if use_z_period < 2 or use_vol_days < 2:
+            continue
 
         # Z-score of returns (latest bar)
-        z_series, last_z = returns_zscore_from_prices(closes, period=z_period)
+        z_series, last_z = returns_zscore_from_prices(closes, period=use_z_period)
         z_score = float(last_z) if last_z is not None else 0.0
 
         # Volume ratio: latest / avg(last volume_avg_days)
-        use_vols = vols[-volume_avg_days:] if len(vols) >= volume_avg_days else vols
+        use_vols = vols[-use_vol_days:] if len(vols) >= use_vol_days else vols
         avg_vol = float(np.mean(use_vols)) if use_vols else 1.0
         latest_vol = float(vols[-1]) if vols else 0.0
         vol_ratio = (latest_vol / avg_vol) if avg_vol > 0 else 0.0

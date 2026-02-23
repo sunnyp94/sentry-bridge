@@ -218,18 +218,31 @@ MICROSTRUCTURE_ENTRY_MODE = _bool("MICROSTRUCTURE_ENTRY_MODE", "false")
 # -----------------------------------------------------------------------------
 # When true, only run strategy for symbols in the active list (from run_screener output).
 OPPORTUNITY_ENGINE_ENABLED = _bool("OPPORTUNITY_ENGINE_ENABLED", "false")
-# Screener: which tickers have |Z| > 2 or 15% volume spike; deploy top N only.
+# Screener: which tickers have |Z| above threshold or volume spike; deploy top N only.
 SCREENER_TOP_N = _int("SCREENER_TOP_N", "5")
-SCREENER_Z_THRESHOLD = _float("SCREENER_Z_THRESHOLD", "2.0")  # |Z| >= this = candidate
-SCREENER_VOLUME_SPIKE_PCT = _float("SCREENER_VOLUME_SPIKE_PCT", "15")  # 15% vs 20d avg
-SCREENER_UNIVERSE = os.environ.get("SCREENER_UNIVERSE", "lab_12")  # lab_12 | env | alpaca_equity | alpaca_equity_500 | file:path
-SCREENER_LOOKBACK_DAYS = _int("SCREENER_LOOKBACK_DAYS", "22")  # bars for Z and 20d vol avg
+SCREENER_Z_THRESHOLD = _float("SCREENER_Z_THRESHOLD", "1.2")  # |Z| >= this = candidate (lower = more anomalies; was 2.0)
+SCREENER_VOLUME_SPIKE_PCT = _float("SCREENER_VOLUME_SPIKE_PCT", "10")  # 10% vs 20d avg (lower = more qualify)
+SCREENER_UNIVERSE = os.environ.get("SCREENER_UNIVERSE", "r2000_sp500_nasdaq100")  # r2000_sp500_nasdaq100 | lab_12 | russell2000 | sp500 | sp400 | nasdaq100 | env | alpaca_equity_500 | file:path
+# Need 21+ trading days for Z/vol (20d). 35 calendar days ~= 25 trading days.
+SCREENER_LOOKBACK_DAYS = _int("SCREENER_LOOKBACK_DAYS", "35")  # bars for Z and 20d vol avg
 SCREENER_CHUNK_SIZE = _int("SCREENER_CHUNK_SIZE", "100")  # bar fetch chunk size for large universes
 SCREENER_CHUNK_DELAY_SEC = _float("SCREENER_CHUNK_DELAY_SEC", "0.5")  # delay between chunks (rate limit)
 # Where screener writes today's active symbols (file path). Consumer reads this when OPPORTUNITY_ENGINE_ENABLED.
 ACTIVE_SYMBOLS_FILE = os.environ.get("ACTIVE_SYMBOLS_FILE", "").strip()  # e.g. data/active_symbols.txt
-# When set (e.g. "08:00"), also run scanner daily at this time ET on full trading days. Scanner always runs at startup when opportunity engine + file are set.
-SCREENER_RUN_AT_ET = os.environ.get("SCREENER_RUN_AT_ET", "08:00").strip()  # "08:00" = 8am ET on market-open days
+# When set, run scanner daily at this time ET on full trading days (e.g. 09:30 = market open). Also runs at container start.
+SCREENER_RUN_AT_ET = os.environ.get("SCREENER_RUN_AT_ET", "09:30").strip()  # "09:30" = market open ET
+
+# -----------------------------------------------------------------------------
+# Two-Stage Intelligence: Discovery (8:00–9:30 ET) → Execution (9:30+)
+# -----------------------------------------------------------------------------
+DISCOVERY_ENABLED = _bool("DISCOVERY_ENABLED", "false")
+DISCOVERY_START_ET = os.environ.get("DISCOVERY_START_ET", "08:00").strip()
+DISCOVERY_END_ET = os.environ.get("DISCOVERY_END_ET", "09:30").strip()
+DISCOVERY_INTERVAL_MIN = _int("DISCOVERY_INTERVAL_MIN", "5")
+DISCOVERY_TOP_N = _int("DISCOVERY_TOP_N", "10")
+TWO_STAGE_ENTRY_ATR_BELOW_VWAP = _float("TWO_STAGE_ENTRY_ATR_BELOW_VWAP", "1.0")
+SCALE_OUT_50_AT_VWAP = _bool("SCALE_OUT_50_AT_VWAP", "true")
+PORTFOLIO_HEALTH_CHECK_ET = os.environ.get("PORTFOLIO_HEALTH_CHECK_ET", "16:00").strip()
 
 # -----------------------------------------------------------------------------
 # Session: no new buys after 3:45pm ET; overnight carry for winners

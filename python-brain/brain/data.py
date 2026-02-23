@@ -1,12 +1,15 @@
 """
 Shared data fetching (Alpaca bars, assets). Used by backtest and screener.
 """
+import logging
 import os
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+
+_log = logging.getLogger(__name__)
 
 # SPY symbol for global 200-day MA regime
 SPY_SYMBOL = "SPY"
@@ -45,13 +48,19 @@ def get_bars(symbols: List[str], days: int) -> Dict[str, pd.DataFrame]:
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame
         from alpaca.data.enums import DataFeed
-    except ImportError:
+    except ImportError as e:
+        _log.warning("get_bars: alpaca.data import failed: %s", e)
         return {}
     key = os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY_ID")
     secret = os.environ.get("APCA_API_SECRET_KEY") or os.environ.get("ALPACA_API_SECRET_KEY")
     if not key or not secret:
+        _log.warning("get_bars: missing APCA_API_KEY_ID or APCA_API_SECRET_KEY (or ALPACA_* env)")
         return {}
-    client = StockHistoricalDataClient(key, secret)
+    # Optional: use same data URL as Go engine (e.g. https://data.alpaca.markets)
+    url_override = os.environ.get("ALPACA_DATA_BASE_URL", "").strip() or None
+    if url_override and not url_override.startswith("http"):
+        url_override = "https://" + url_override
+    client = StockHistoricalDataClient(key, secret, url_override=url_override) if url_override else StockHistoricalDataClient(key, secret)
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
     feed = DataFeed.SIP if os.environ.get("ALPACA_DATA_FEED", "").lower() == "sip" else DataFeed.IEX
@@ -62,11 +71,23 @@ def get_bars(symbols: List[str], days: int) -> Dict[str, pd.DataFrame]:
         end=end,
         feed=feed,
     )
-    bars = client.get_stock_bars(req)
-    if bars is None:
+    _log.info("get_bars: request symbols=%s days=%d start=%s end=%s feed=%s", symbols[:5], days, start.isoformat(), end.isoformat(), feed)
+    try:
+        bars = client.get_stock_bars(req)
+    except Exception as e:
+        _log.warning("get_bars: Alpaca API error: %s", e)
         return {}
+    if bars is None:
+        _log.warning("get_bars: Alpaca returned None")
+        return {}
+    # Debug: what did we get?
+    has_df = hasattr(bars, "df") and bars.df is not None
+    df_shape = bars.df.shape if has_df else None
+    has_data = hasattr(bars, "data") and isinstance(bars.data, dict)
+    data_keys = list(bars.data.keys()) if has_data else []
+    _log.info("get_bars: response has_df=%s df_shape=%s has_data=%s data_keys=%s", has_df, df_shape, has_data, data_keys[:10] if data_keys else [])
     out: Dict[str, pd.DataFrame] = {}
-    if hasattr(bars, "df") and bars.df is not None and not bars.df.empty:
+    if has_df and not bars.df.empty:
         for sym in symbols:
             try:
                 if hasattr(bars.df.index, "get_level_values") and sym in bars.df.index.get_level_values(0):
@@ -82,9 +103,10 @@ def get_bars(symbols: List[str], days: int) -> Dict[str, pd.DataFrame]:
                 if "open" not in df.columns and "o" in df.columns:
                     df["open"] = df["o"]
                 out[sym] = df
-            except Exception:
+            except Exception as e:
+                _log.debug("get_bars: parse %s: %s", sym, e)
                 continue
-    elif hasattr(bars, "data") and isinstance(bars.data, dict):
+    elif has_data:
         for sym in symbols:
             if sym not in bars.data or not bars.data[sym]:
                 continue
@@ -95,6 +117,8 @@ def get_bars(symbols: List[str], days: int) -> Dict[str, pd.DataFrame]:
                     "volume": getattr(b, "volume", 0),
                 })
             out[sym] = pd.DataFrame(rows)
+    if not out:
+        _log.warning("get_bars: parsed 0 DataFrames (df.empty=%s or no matching symbols)", bars.df.empty if has_df else "n/a")
     return out
 
 
@@ -109,6 +133,8 @@ def get_bars_chunked(
     With 10k calls/min (Active Trader Pro), chunk_size=100 and ~0.5s delay
     keeps you well under the limit.
     """
+    n_chunks = (len(symbols) + chunk_size - 1) // chunk_size
+    _log.info("get_bars_chunked: %d symbols in %d chunks (chunk_size=%d)", len(symbols), n_chunks, chunk_size)
     out: Dict[str, pd.DataFrame] = {}
     for i in range(0, len(symbols), chunk_size):
         chunk = symbols[i : i + chunk_size]
@@ -116,6 +142,7 @@ def get_bars_chunked(
         out.update(chunk_bars)
         if i + chunk_size < len(symbols) and delay_between_chunks_sec > 0:
             time.sleep(delay_between_chunks_sec)
+    _log.info("get_bars_chunked: got bars for %d symbols", len(out))
     return out
 
 

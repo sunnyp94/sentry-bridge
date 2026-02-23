@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/sentry-bridge /app/sentry-bridge
 COPY python-brain/ /app/python-brain/
+COPY data/ /app/data/
 WORKDIR /app
 RUN pip install --no-cache-dir -r /app/python-brain/requirements.txt
 # Validate Python: compile all .py (syntax) and verify brain package imports (fail build on errors)

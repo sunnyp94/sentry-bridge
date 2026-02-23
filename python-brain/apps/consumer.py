@@ -45,6 +45,7 @@ from brain.rules.daily_cap import update_equity, is_daily_cap_reached, should_fl
 from brain.rules.drawdown import update_drawdown_peak, is_drawdown_halt
 from brain.market_calendar import is_full_trading_day
 from brain import config as brain_config
+from brain.discovery import run_discovery, DiscoveryEngine, _parse_et_time as discovery_parse_et
 
 # OFI (Order Flow Imbalance) from live trade/quote when USE_OFI=true (brain.signals.microstructure.OFITracker)
 _ofi_tracker: Optional[object] = None
@@ -194,6 +195,8 @@ positions_qty: dict[str, int] = {}
 position_unrealized_pl_pct: dict[str, float] = {}
 position_entry_price: dict[str, float] = {}
 position_current_price: dict[str, float] = {}
+# Two-stage: track symbols for which we already scaled out 50% at VWAP (runner remains with trailing ATR)
+_scaled_50_at_vwap: set = set()
 # Scale-out: levels (e.g. 0.01, 0.02, 0.03) already hit per symbol
 _scale_out_done: dict[str, set] = {}
 session_by_symbol: dict[str, str] = defaultdict(lambda: "regular")
@@ -330,8 +333,10 @@ def run_stop_loss_check() -> None:
             cur_price = float(cur_price) if cur_price is not None else None
         except (TypeError, ValueError):
             cur_price = None
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=True, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma())
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=True, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window())
         if d.action == "sell" and d.qty > 0:
+            if d.reason == "scale_out_50_at_vwap":
+                _scaled_50_at_vwap.add(sym)
             log.warning("stop_loss symbol=%s pl_pct=%.2f%% sell qty=%d reason=%s", d.symbol, pl_pct * 100, d.qty, d.reason)
             _try_place_order(d)
 
@@ -354,6 +359,40 @@ def _is_in_closing_window() -> bool:
         return (et.hour > start_h) or (et.hour == start_h and et.minute >= start_m)
     except Exception:
         return False
+
+
+def _is_in_health_check_window() -> bool:
+    """True if weekday ET >= PORTFOLIO_HEALTH_CHECK_ET (e.g. 16:00): close all losers, keep winners with trailing ATR."""
+    check_et = getattr(brain_config, "PORTFOLIO_HEALTH_CHECK_ET", "").strip()
+    if not check_et or ZoneInfo is None:
+        return False
+    try:
+        et = datetime.now(ZoneInfo("America/New_York"))
+        if et.weekday() > 4:
+            return False
+        parts = check_et.strip().split(":")
+        if len(parts) != 2:
+            return False
+        h, m = int(parts[0]), int(parts[1])
+        return (et.hour > h) or (et.hour == h and et.minute >= m)
+    except Exception:
+        return False
+
+
+def run_portfolio_health_check() -> None:
+    """At 16:00 ET (PORTFOLIO_HEALTH_CHECK_ET): close all losing positions; winners keep trailing ATR."""
+    if not _is_in_health_check_window():
+        return
+    for sym, qty in list(positions_qty.items()):
+        if qty <= 0:
+            continue
+        pl_pct = position_unrealized_pl_pct.get(sym)
+        if pl_pct is None or pl_pct >= 0:
+            continue
+        size = min(abs(qty), brain_config.STRATEGY_MAX_QTY)
+        d = Decision("sell", sym, size, "portfolio_health_check_loser")
+        log.info("portfolio_health_check symbol=%s pl_pct=%.2f%% close loser (winners keep trailing ATR)", sym, pl_pct * 100)
+        _try_place_order(d, skip_cooldown=True)
 
 
 def run_close_losses_before_close() -> None:
@@ -435,7 +474,9 @@ def run_strategy_on_news(payload: dict) -> None:
             cur_price = float(cur_price) if cur_price is not None else None
         except (TypeError, ValueError):
             cur_price = None
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=consensus_ok, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma())
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, consensus_ok=consensus_ok, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window())
+        if d.reason == "scale_out_50_at_vwap":
+            _scaled_50_at_vwap.add(sym)
         log.info(
             "strategy symbol=%s sources=%s sentiment_ema=%.2f prob_gain=%.2f consensus_ok=%s -> action=%s qty=%d reason=%s",
             d.symbol, cr_sym.sources, sent_ema, prob, consensus_ok, d.action, d.qty, d.reason,
@@ -523,6 +564,9 @@ def handle_event(ev: dict) -> None:
                         position_current_price[sym] = cp
                 except (TypeError, ValueError):
                     pass
+        for sym in list(_scaled_50_at_vwap):
+            if positions_qty.get(sym, 0) <= 0:
+                _scaled_50_at_vwap.discard(sym)
         get_equity_ms = 0.0
         try:
             from brain.executor import get_account_equity
@@ -539,6 +583,7 @@ def handle_event(ev: dict) -> None:
         run_stop_loss_check()
         run_flat_when_daily_target()
         run_close_losses_before_close()
+        run_portfolio_health_check()
         stop_loss_ms = (_PERF() - t1) * 1000
         log.info("latency step=positions get_equity_ms=%.1f stop_loss_ms=%.1f", get_equity_ms, stop_loss_ms)
     elif typ == "news":
@@ -622,7 +667,16 @@ def _scheduler_loop() -> None:
             time.sleep(sleep_secs)
         run_date = next_run.date()
         if is_full_trading_day(run_date):
-            _run_scanner_at_startup()
+            if getattr(brain_config, "DISCOVERY_ENABLED", False):
+                log.info("handoff: running discovery (Priority Watchlist) at %02d:%02d ET", hour, minute)
+                run_discovery(
+                    top_n=getattr(brain_config, "DISCOVERY_TOP_N", 10),
+                    lookback_days=getattr(brain_config, "SCREENER_LOOKBACK_DAYS", 35),
+                    z_threshold=2.0,
+                    volume_spike_pct=15.0,
+                )
+            else:
+                _run_scanner_at_startup()
         else:
             log.info("skip scanner: %s is not a full trading day", run_date)
 
@@ -631,15 +685,37 @@ def main() -> None:
     from brain.log_config import init as init_logging
     init_logging()
 
-    # Opportunity engine: run scanner at startup and, when SCREENER_RUN_AT_ET set, also at that time (e.g. 8am ET) on full trading days.
+    # Opportunity engine: scanner or two-stage discovery (8:00–9:30 ET) + handoff at 9:30.
     if getattr(brain_config, "OPPORTUNITY_ENGINE_ENABLED", False):
         path = getattr(brain_config, "ACTIVE_SYMBOLS_FILE", "").strip()
         run_at_et = getattr(brain_config, "SCREENER_RUN_AT_ET", "").strip()
+        discovery_enabled = getattr(brain_config, "DISCOVERY_ENABLED", False)
         if path:
-            _run_scanner_at_startup()
+            if discovery_enabled and ZoneInfo:
+                from brain.discovery import _in_discovery_window
+                if _in_discovery_window(
+                    discovery_parse_et(getattr(brain_config, "DISCOVERY_START_ET", "08:00")),
+                    discovery_parse_et(getattr(brain_config, "DISCOVERY_END_ET", "09:30")),
+                ):
+                    run_discovery(top_n=getattr(brain_config, "DISCOVERY_TOP_N", 10))
+                else:
+                    _run_scanner_at_startup()
+            else:
+                _run_scanner_at_startup()
         if path and run_at_et and _parse_run_at_et(run_at_et):
             t = threading.Thread(target=_scheduler_loop, daemon=True)
             t.start()
+        if path and discovery_enabled:
+            start_et = discovery_parse_et(getattr(brain_config, "DISCOVERY_START_ET", "08:00"))
+            end_et = discovery_parse_et(getattr(brain_config, "DISCOVERY_END_ET", "09:30"))
+            interval_min = getattr(brain_config, "DISCOVERY_INTERVAL_MIN", 5)
+            engine = DiscoveryEngine(
+                start_et=start_et,
+                end_et=end_et,
+                interval_sec=interval_min * 60,
+                top_n=getattr(brain_config, "DISCOVERY_TOP_N", 10),
+            )
+            threading.Thread(target=engine.run_loop, daemon=True).start()
         active = _get_active_symbols()
         log.info("opportunity_engine enabled; active_symbols from %s: %s", path or "(no file)", list(active)[:20] if active else [])
 

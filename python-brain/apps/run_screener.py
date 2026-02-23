@@ -7,14 +7,18 @@ When OPPORTUNITY_ENGINE_ENABLED=true, the consumer uses this file as the daily o
 it only runs strategy (and trades) for symbols in that list.
 
 Run daily (e.g. cron at market open or 8am ET):
-  python3 apps/run_screener.py [--universe lab_12] [--top 5] [--out data/active_symbols.txt]
+  python3 apps/run_screener.py [--universe r2000_sp500_nasdaq100] [--top 5] [--out data/active_symbols.txt]
 
 Without --out, prints symbols to stdout. With --out or ACTIVE_SYMBOLS_FILE, writes the pool file.
 """
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
+
+# So brain.data get_bars debug logs are visible (e.g. in Docker)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
 _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
@@ -27,7 +31,7 @@ from brain.screener import get_universe, score_universe
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Screen universe for Z/volume/OFI opportunities; output top N symbols")
-    parser.add_argument("--universe", type=str, default=None, help="lab_12 | env | alpaca_equity | alpaca_equity_500 | sp400 | nasdaq100 | file:path.txt | comma list")
+    parser.add_argument("--universe", type=str, default=None, help="r2000_sp500_nasdaq100 | lab_12 | russell2000 | sp500 | sp400 | nasdaq100 | env | alpaca_equity_500 | file:path.txt | comma list")
     parser.add_argument("--top", type=int, default=None, help="Top N symbols (default: SCREENER_TOP_N or 5)")
     parser.add_argument("--out", type=str, default=None, help="Write symbols to file (one per line); default ACTIVE_SYMBOLS_FILE or stdout")
     parser.add_argument("--days", type=int, default=None, help="Lookback days for bars (default SCREENER_LOOKBACK_DAYS or 22)")
@@ -37,7 +41,7 @@ def main() -> int:
     parser.add_argument("--chunk-delay", type=float, default=None, help="Seconds between bar chunks (default from config or 0.5)")
     args = parser.parse_args()
 
-    universe_name = args.universe or getattr(brain_config, "SCREENER_UNIVERSE", "lab_12")
+    universe_name = args.universe or getattr(brain_config, "SCREENER_UNIVERSE", "r2000_sp500_nasdaq100")
     universe = get_universe(universe_name)
     if not universe:
         print("Empty universe; set --universe or SCREENER_UNIVERSE", file=sys.stderr)
@@ -68,7 +72,8 @@ def main() -> int:
             with open(out_path, "w") as f:
                 for s in active:
                     f.write(s + "\n")
-            print("No bar data (market closed?); wrote fallback list to %s: %s" % (out_path, active), file=sys.stderr)
+            print("[SCANNER] USING BACKUP LIST (no bar data — market closed or API issue): %s" % active, file=sys.stderr)
+            print("Wrote %d symbols to %s" % (len(active), out_path), file=sys.stderr)
         else:
             for s in active:
                 print(s)
@@ -86,7 +91,7 @@ def main() -> int:
     if not active:
         # No candidates met Z/volume criteria; fallback to first N from universe so we don't leave bot with empty list
         active = universe[:top_n]
-        print("No symbols met Z/volume criteria; using first %d from universe: %s" % (top_n, active), file=sys.stderr)
+        print("[SCANNER] USING BACKUP LIST (no symbols met Z/volume criteria): %s" % active, file=sys.stderr)
 
     out_path = args.out or getattr(brain_config, "ACTIVE_SYMBOLS_FILE", "").strip()
     if out_path:
@@ -94,12 +99,13 @@ def main() -> int:
         with open(out_path, "w") as f:
             for s in active:
                 f.write(s + "\n")
+        if scored:
+            print("[SCANNER] OPPORTUNITY LIST (Z/vol scored): %s" % active, file=sys.stderr)
+            print("Top opportunities: %s" % [(s, info.get("reason")) for s, info in scored], file=sys.stderr)
         print("Wrote %d active symbols to %s" % (len(active), out_path), file=sys.stderr)
     else:
         for s in active:
             print(s)
-    if scored:
-        print("Top opportunities:", [(s, info.get("reason")) for s, info in scored], file=sys.stderr)
     return 0
 
 

@@ -152,6 +152,8 @@ def decide(
     current_price: Optional[float] = None,
     regime: Optional[str] = None,
     spy_below_200ma: Optional[bool] = None,
+    scaled_50_at_vwap: bool = False,
+    in_health_check_window: bool = False,
 ) -> Decision:
     """
     Orchestrate rules and thresholds into a single decision.
@@ -188,12 +190,21 @@ def decide(
 
     have_position = position_qty > 0
 
-    # Stop loss
+    # 16:00 Portfolio Health Check: close all losing positions; keep winners with trailing ATR
+    if in_health_check_window and have_position and unrealized_pl_pct is not None and unrealized_pl_pct < 0:
+        return Decision("sell", symbol, min(abs(position_qty), max_qty), "portfolio_health_check_loser")
+
+    # Stop loss (initial 2×ATR below entry; strategy already uses ATR when USE_ATR_STOP)
     if have_position and unrealized_pl_pct is not None and unrealized_pl_pct <= -stop_loss_pct:
         return Decision("sell", symbol, min(abs(position_qty), max_qty), f"stop_loss {unrealized_pl_pct*100:.2f}%")
 
-    # Take profit at VWAP (mean reversion target when we entered below VWAP)
+    # Scale out 50% at VWAP (two-stage: lock half at mean reversion; trail the rest)
     take_profit_at_vwap = getattr(config, "TAKE_PROFIT_AT_VWAP", False)
+    scale_out_50 = getattr(config, "SCALE_OUT_50_AT_VWAP", False)
+    if take_profit_at_vwap and scale_out_50 and have_position and not scaled_50_at_vwap and vwap_distance_pct is not None and vwap_distance_pct >= 0:
+        half_qty = max(1, abs(position_qty) // 2)
+        return Decision("sell", symbol, min(half_qty, max_qty), "scale_out_50_at_vwap")
+    # Full take profit at VWAP (when not scaling 50% or already scaled)
     if take_profit_at_vwap and have_position and vwap_distance_pct is not None and vwap_distance_pct >= 0:
         return Decision("sell", symbol, min(abs(position_qty), max_qty), "take_profit_at_vwap")
     # Take profit (fixed % when enabled)
@@ -285,6 +296,16 @@ def decide(
             return Decision("hold", symbol, 0, "vwap_above_no_long")
         if not vwap_long_only_below and vwap_distance_pct > vwap_extended_pct:
             return Decision("hold", symbol, 0, f"vwap_extended {vwap_distance_pct:.1f}%")
+    # Two-stage entry: only long when price is at least N×ATR below VWAP and OFI shows buying pressure
+    entry_atr_below = getattr(config, "TWO_STAGE_ENTRY_ATR_BELOW_VWAP", 0)
+    if entry_atr_below > 0 and not have_position and vwap_distance_pct is not None and atr_stop_pct is not None:
+        atr_mult = getattr(config, "ATR_STOP_MULTIPLE", 2.0)
+        # Require price <= VWAP - N×ATR  =>  vwap_distance_pct <= - (N × ATR/VWAP %). ATR% ≈ atr_stop_pct/atr_mult.
+        threshold_pct = - (entry_atr_below * atr_stop_pct / atr_mult)
+        if vwap_distance_pct > threshold_pct:
+            return Decision("hold", symbol, 0, f"two_stage_entry price not {entry_atr_below}×ATR below vwap ({vwap_distance_pct:.2f}% > {threshold_pct:.2f}%)")
+    if entry_atr_below > 0 and not have_position and ofi is not None and ofi < 0:
+        return Decision("hold", symbol, 0, f"two_stage_entry ofi_negative {ofi:.2f}")
     # Buy: ATR tradable band — only trade when ATR in percentile range (avoid extreme vol)
     atr_pct_min = getattr(config, "ATR_PERCENTILE_MIN", 0)
     atr_pct_max = getattr(config, "ATR_PERCENTILE_MAX", 100)
