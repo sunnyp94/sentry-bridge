@@ -87,6 +87,45 @@ BRAIN_CMD="python3 /app/python-brain/apps/consumer.py"
 
 Then run the app container with that env; point it at Redis Cloud instead of a local Redis.
 
+### Deploy on a GCP VM (single-command startup)
+
+The same Docker setup runs on a GCP VM with one command. Compose uses `restart: unless-stopped`, so containers come back after a VM reboot as long as Docker is enabled.
+
+1. **Create a VM** (e.g. **Ubuntu 22.04**, e2-medium or larger, in a region you prefer).
+
+2. **SSH in and install Docker** (and Compose v2):
+   ```bash
+   sudo apt-get update && sudo apt-get install -y ca-certificates curl gnupg
+   sudo install -m 0755 -d /etc/apt/keyrings
+   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+   sudo chmod a+r /etc/apt/keyrings/docker.gpg
+   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+   sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+   sudo usermod -aG docker "$USER"
+   ```
+   Log out and back in (or `newgrp docker`) so `docker` runs without `sudo`.
+
+3. **Clone the repo and configure env:**
+   ```bash
+   git clone <your-repo-url> sentry-bridge && cd sentry-bridge
+   cp .env.example .env
+   # Edit .env: set APCA_API_KEY_ID, APCA_API_SECRET_KEY, and scanner options (ACTIVE_SYMBOLS_FILE, OPPORTUNITY_ENGINE_ENABLED, SCREENER_UNIVERSE).
+   # Do not set REDIS_URL or BRAIN_CMD — compose sets them for the app container.
+   ```
+
+4. **Start the full stack (single command):**
+   ```bash
+   docker compose up -d --build
+   ```
+   This builds the app image (Go + Python brain), starts Redis, then the app. The entrypoint runs the scanner if `ACTIVE_SYMBOLS_FILE` is set, then starts the Go engine; Go starts the Python brain via `BRAIN_CMD`. Logs: `docker compose logs -f app`.
+
+5. **Optional:** Ensure Docker starts on boot (Ubuntu often does this by default):
+   ```bash
+   sudo systemctl enable docker
+   ```
+
+To stop: `docker compose down`. To update: `git pull && docker compose up -d --build`.
+
 ---
 
 ### Run without Docker (Go + Python brain on your machine)
