@@ -1,9 +1,9 @@
-# Deploy Sentry Bridge to GCP and auto-deploy on every merge to main
+# Deploy Sentry Bridge to GCP
 
 This guide covers:
 
 1. One-time VM setup (Docker, clone repo, `.env`).
-2. GitHub Actions: build image in CI, push to ghcr.io, deploy to VM (pull + run; no build on VM).
+2. GitHub Actions: **merge/push to main** = build image and push to ghcr.io only; **manual trigger** = build and deploy to VM (pull + run; no build on VM).
 3. Where to find values and how to add GitHub secrets.
 
 ---
@@ -55,7 +55,7 @@ Set at least: `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `ACTIVE_SYMBOLS_FILE=dat
 
 ### 1.4 First run (optional)
 
-If you use the deploy-on-merge workflow (Part 2), the **first workflow run** will pull the image and start the stack—you can skip building on the VM. Otherwise:
+If you will use the workflow (Part 2), run it **manually** once to pull the image and start the stack—you can skip building on the VM. Otherwise:
 
 ```bash
 docker compose up -d --build
@@ -71,9 +71,10 @@ sudo systemctl enable docker
 
 ---
 
-## Part 2: Deploy on every merge to main
+## Part 2: GitHub Actions — build on push, deploy on manual trigger
 
-The workflow **builds the image in GitHub Actions**, pushes to **ghcr.io**, then SSHs to the VM and runs `git` update, `docker compose pull`, and `docker compose up -d`. No build on the VM.
+- **Merge or push to main:** workflow **only builds** the image and pushes to **ghcr.io**. The deploy job does **not** run (no SSH to VM).
+- **Manual trigger (Actions → Deploy to GCP VM → Run workflow):** workflow **builds** the image, pushes to ghcr.io, **and deploys** to the VM (`git` update, `docker compose pull`, `docker compose up -d`). No build on the VM.
 
 ### 2.1 Create deploy SSH key (on your Mac/laptop)
 
@@ -127,10 +128,8 @@ Note: If you use Option C, GCP’s metadata agent may overwrite `authorized_keys
 
 ### 2.4 Trigger the workflow
 
-- **On push to main:** The workflow runs and **builds + pushes** the image to ghcr.io. The **Deploy on VM** job is **skipped** (so the run never fails with SSH errors). This is intentional: pushes from merged fork PRs do not receive secrets.
-- **To deploy:** After pushing (or anytime), run **Actions** → **Deploy to GCP VM** → **Run workflow** → **Run workflow**. That run will build (if needed) and **deploy** to the VM using your secrets.
-
-The **Build and push image** job builds the Docker image and pushes to `ghcr.io/<owner>/<repo>/sentry-bridge-app:latest`. The **Deploy on VM** job (manual runs only) SSHs to the VM, runs `git fetch` / `git reset --hard origin/main`, logs in to ghcr.io with `GHCR_PAT`, then `docker compose pull` and `docker compose up -d`.
+- **Merge or push to main:** Workflow runs and **only builds** the image, then pushes to `ghcr.io/<owner>/<repo>/sentry-bridge-app:latest`. The **Deploy on VM** job is **skipped** (no SSH).
+- **Manual trigger:** In the repo go to **Actions** → **Deploy to GCP VM** → **Run workflow** → **Run workflow**. That run **builds** the image, pushes to ghcr.io, **and deploys** to the VM (SSH, `git fetch` / `git reset --hard origin/main`, `docker login` ghcr.io, `docker compose pull`, `docker compose up -d`).
 
 ---
 

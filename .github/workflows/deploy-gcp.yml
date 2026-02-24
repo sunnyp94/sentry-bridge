@@ -1,6 +1,6 @@
-# Build app image in CI, push to GitHub Container Registry; deploy on GCP VM by pulling (no build on VM).
-# Secrets: GCP_VM_HOST, GCP_VM_USER, GCP_SSH_PRIVATE_KEY, GHCR_PAT (read:packages for VM to pull).
-# Optional: GCP_REPO_PATH (default ~/sentry-bridge).
+# Merge/push to main: build image and push to ghcr.io only (deploy job skipped).
+# Manual trigger (Run workflow): build + push + deploy to GCP VM (SSH, docker compose pull, up -d).
+# Secrets: GCP_VM_HOST, GCP_VM_USER, GCP_SSH_PRIVATE_KEY, GHCR_PAT. Optional: GCP_REPO_PATH (default ~/sentry-bridge).
 name: Deploy to GCP VM
 
 on:
@@ -55,8 +55,7 @@ jobs:
     name: Deploy on VM
     runs-on: ubuntu-latest
     needs: build
-    # Only deploy when run manually. Push-to-main (e.g. from merging a fork PR) does not receive
-    # secrets, so SSH would fail. Build still runs on push; deploy via Actions → Run workflow.
+    # Deploy only on manual trigger. Push/merge to main = build only (no deploy).
     if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Set image tag

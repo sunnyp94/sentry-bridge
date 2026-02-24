@@ -34,7 +34,7 @@ Sentry Bridge is an **automated trading system** that streams market data from *
 - **Single Docker stack** – Go engine + **Redis** + Python brain in one `docker compose` setup.
 - **Redis** – Runs **locally in the same Docker Compose** on the GCP VM for **low latency** (no external Redis required for production).
 - **GCP VM** – One-command startup: install Docker, clone repo, configure `.env`, run `docker compose up -d --build`. Containers use `restart: unless-stopped`.
-- **Build on push, deploy on demand** – On push to `main`, GitHub Actions builds the image and pushes to ghcr.io. Deploy to the VM runs only when you trigger the workflow manually (Actions → Deploy to GCP VM → Run workflow), so pushes never fail on SSH (e.g. after merging a fork PR).
+- **GitHub Actions** – **Merge/push to main:** builds the image and pushes to ghcr.io only (no deploy). **Manual trigger:** builds and deploys to the VM (Actions → Deploy to GCP VM → Run workflow).
 
 ## Prerequisites
 
@@ -122,21 +122,24 @@ The recommended production setup is a **GCP Compute Engine VM** running the full
    ```
 
 4. **Start the full stack**  
-   If you use **Deploy on every merge to main** (below), the first workflow run will pull the pre-built image and start the stack—no build on the VM. Otherwise run once: `docker compose up -d --build` (ensure the VM has enough disk). Redis runs locally on the VM. Logs: `docker compose logs -f app`.
+   Run the workflow **manually** once (Actions → Deploy to GCP VM → Run workflow) to pull the image and start the stack—or run `docker compose up -d --build` on the VM (ensure enough disk). Redis runs locally on the VM. Logs: `docker compose logs -f app`.
 
 5. **Optional:** Ensure Docker starts on boot:
    ```bash
    sudo systemctl enable docker
    ```
 
-To stop: `docker compose down`. To update: with the workflow, push to `main`; or on the VM run `git pull` then `docker compose pull && docker compose up -d` (with `DOCKER_IMAGE` set to your ghcr.io image when using the pre-built image).
+To stop: `docker compose down`. To update: run the workflow **manually** to deploy, or on the VM run `git pull` then `docker compose pull && docker compose up -d` (with `DOCKER_IMAGE` set to your ghcr.io image).
 
-#### Deploy on every merge to main
+#### GitHub Actions: build on push, deploy on manual trigger
 
-The workflow **builds the app image in GitHub Actions**, pushes it to **GitHub Container Registry (ghcr.io)**, then SSHs to the VM and runs **pull + up** (no build on the VM, so the VM needs less disk and never runs out of space during deploy). One-time setup (see also [docs/DEPLOY_GCP.md](docs/DEPLOY_GCP.md) for a full step-by-step):
+- **Merge or push to main:** workflow **only builds** the image and pushes to **ghcr.io**. Deploy is **not** run (no SSH to VM).
+- **Manual trigger (Actions → Deploy to GCP VM → Run workflow):** workflow **builds**, pushes to ghcr.io, **and deploys** to the VM (SSH, `docker compose pull`, `docker compose up -d`).
+
+One-time setup (see also [docs/DEPLOY_GCP.md](docs/DEPLOY_GCP.md)):
 
 1. **VM and app**  
-   Complete the GCP VM steps above (create VM, install Docker, clone repo, configure `.env`). You can run `docker compose up -d --build` once locally on the VM to verify, or wait for the first automated deploy. Note the VM’s external IP.
+   Complete the GCP VM steps above (create VM, install Docker, clone repo, configure `.env`). Run `docker compose up -d --build` once on the VM to verify, or wait for the first manual deploy (Run workflow). Note the VM’s external IP.
 
 2. **SSH key for GitHub Actions**  
    On your machine, create a key pair used only for deploys (no passphrase):
@@ -154,7 +157,7 @@ The workflow **builds the app image in GitHub Actions**, pushes it to **GitHub C
    - **`GCP_REPO_PATH`** (optional) – Repo path on the VM if not `~/sentry-bridge` (e.g. `/home/sunnyakpatel/sentry-bridge`).
 
 4. **Result**  
-   On **push to main**: the workflow builds the Docker image and pushes to `ghcr.io/<owner>/<repo>/sentry-bridge-app:latest`; the deploy step is skipped. To **deploy** to the VM, run the workflow manually: **Actions** → **Deploy to GCP VM** → **Run workflow**. That run will build (if needed) and SSH to the VM, update the repo to `origin/main`, log in to ghcr.io with `GHCR_PAT`, then `docker compose pull` and `docker compose up -d`.
+   **Push/merge to main** → build + push image only. **Manual Run workflow** → build + push + deploy to VM (SSH, `git reset --hard origin/main`, `docker compose pull`, `docker compose up -d`).
 
 ---
 
