@@ -55,6 +55,9 @@ jobs:
     name: Deploy on VM
     runs-on: ubuntu-latest
     needs: build
+    # Only deploy when run manually. Push-to-main (e.g. from merging a fork PR) does not receive
+    # secrets, so SSH would fail. Build still runs on push; deploy via Actions → Run workflow.
+    if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Set image tag
         id: meta

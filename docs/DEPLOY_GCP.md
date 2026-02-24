@@ -127,10 +127,10 @@ Note: If you use Option C, GCP’s metadata agent may overwrite `authorized_keys
 
 ### 2.4 Trigger the workflow
 
-- **Automatic:** Push or merge to the `main` branch.
-- **Manual:** **Actions** → **Deploy to GCP VM** → **Run workflow** → **Run workflow**.
+- **On push to main:** The workflow runs and **builds + pushes** the image to ghcr.io. The **Deploy on VM** job is **skipped** (so the run never fails with SSH errors). This is intentional: pushes from merged fork PRs do not receive secrets.
+- **To deploy:** After pushing (or anytime), run **Actions** → **Deploy to GCP VM** → **Run workflow** → **Run workflow**. That run will build (if needed) and **deploy** to the VM using your secrets.
 
-The **Build and push image** job builds the Docker image and pushes to `ghcr.io/<owner>/<repo>/sentry-bridge-app:latest`. The **Deploy on VM** job SSHs to the VM, runs `git fetch` / `git reset --hard origin/main`, logs in to ghcr.io with `GHCR_PAT`, then `docker compose pull` and `docker compose up -d`.
+The **Build and push image** job builds the Docker image and pushes to `ghcr.io/<owner>/<repo>/sentry-bridge-app:latest`. The **Deploy on VM** job (manual runs only) SSHs to the VM, runs `git fetch` / `git reset --hard origin/main`, logs in to ghcr.io with `GHCR_PAT`, then `docker compose pull` and `docker compose up -d`.
 
 ---
 

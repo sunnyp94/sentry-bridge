@@ -34,7 +34,7 @@ Sentry Bridge is an **automated trading system** that streams market data from *
 - **Single Docker stack** – Go engine + **Redis** + Python brain in one `docker compose` setup.
 - **Redis** – Runs **locally in the same Docker Compose** on the GCP VM for **low latency** (no external Redis required for production).
 - **GCP VM** – One-command startup: install Docker, clone repo, configure `.env`, run `docker compose up -d --build`. Containers use `restart: unless-stopped`.
-- **Deploy on every merge to main** – GitHub Actions builds the image in CI, pushes to ghcr.io, then SSHs to the VM and runs `git` update, `docker compose pull`, and `docker compose up -d` (no build on the VM).
+- **Build on push, deploy on demand** – On push to `main`, GitHub Actions builds the image and pushes to ghcr.io. Deploy to the VM runs only when you trigger the workflow manually (Actions → Deploy to GCP VM → Run workflow), so pushes never fail on SSH (e.g. after merging a fork PR).
 
 ## Prerequisites
 
@@ -154,7 +154,7 @@ The workflow **builds the app image in GitHub Actions**, pushes it to **GitHub C
    - **`GCP_REPO_PATH`** (optional) – Repo path on the VM if not `~/sentry-bridge` (e.g. `/home/sunnyakpatel/sentry-bridge`).
 
 4. **Result**  
-   Every push (or merge) to `main`: (1) workflow builds the Docker image and pushes to `ghcr.io/<owner>/<repo>/sentry-bridge-app:latest`, (2) SSHs to the VM, updates the repo to `origin/main`, logs in to ghcr.io with `GHCR_PAT`, runs `docker compose pull` and `docker compose up -d`. You can also run the workflow manually from **Actions** → **Deploy to GCP VM** → **Run workflow**.
+   On **push to main**: the workflow builds the Docker image and pushes to `ghcr.io/<owner>/<repo>/sentry-bridge-app:latest`; the deploy step is skipped. To **deploy** to the VM, run the workflow manually: **Actions** → **Deploy to GCP VM** → **Run workflow**. That run will build (if needed) and SSH to the VM, update the repo to `origin/main`, log in to ghcr.io with `GHCR_PAT`, then `docker compose pull` and `docker compose up -d`.
 
 ---
 
