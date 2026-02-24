@@ -245,9 +245,14 @@ def _get_price(symbol: str) -> Optional[float]:
     return None
 
 
-def _try_place_order(d: Decision, skip_cooldown: bool = False, price_override: Optional[float] = None) -> bool:
-    """If decision is buy/sell with qty, respect cooldown (unless skip_cooldown e.g. daily_target_hit), apply position sizing (buy), and place order. Returns True if placed.
-    price_override: when set (e.g. from strategy run), use for sizing and limit order so we get limit buys when we have a price."""
+def _try_place_order(
+    d: Decision,
+    skip_cooldown: bool = False,
+    price_override: Optional[float] = None,
+    snapshot_context: Optional[dict] = None,
+) -> bool:
+    """If decision is buy/sell with qty, respect cooldown, apply position sizing (buy), place order. Returns True if placed.
+    snapshot_context: optional dict for experience buffer (technical_score, ofi, prob_gain, structure_ok, unrealized_pl_pct for exits)."""
     global _last_equity
     if d.action not in ("buy", "sell") or d.qty <= 0:
         return False
@@ -259,32 +264,79 @@ def _try_place_order(d: Decision, skip_cooldown: bool = False, price_override: O
         return False
     from brain.executor import place_order, get_account_equity
     price = price_override if price_override is not None and price_override > 0 else _get_price(d.symbol)
-    # Pillar 1: position sizing — risk-based when RISK_PCT_PER_TRADE > 0 and ATR available, else POSITION_SIZE_PCT
+    # Pillar 1: position sizing — 5% of equity per trade (same paper and live)
     if d.action == "buy" and price and price > 0:
         equity = _last_equity
         if equity is None or equity <= 0:
             equity = get_account_equity()
             if equity is not None:
                 _last_equity = equity
+        if equity is None or equity <= 0:
+            try:
+                eq_env = os.environ.get("EQUITY_OVERRIDE", "").strip()
+                if eq_env:
+                    equity = float(eq_env)
+                    if equity > 0:
+                        _last_equity = equity
+                        log.info("position_size using EQUITY_OVERRIDE=%.2f", equity)
+            except (TypeError, ValueError):
+                pass
         if equity and equity > 0:
+            pct = getattr(brain_config, "POSITION_SIZE_PCT", 0.05)
             risk_pct = getattr(brain_config, "RISK_PCT_PER_TRADE", 0)
-            atr = getattr(d, "atr", None)  # optional: set by caller when available (e.g. from bars)
+            atr = getattr(d, "atr", None)
             if risk_pct > 0 and atr is not None and atr > 0:
                 from brain import sizing as brain_sizing
                 atr_mult = getattr(brain_config, "ATR_STOP_MULTIPLE", 2.0)
                 qty = brain_sizing.position_size_shares(equity, price, atr=atr, atr_stop_multiple=atr_mult, max_qty=brain_config.STRATEGY_MAX_QTY)
             else:
-                pct = getattr(brain_config, "POSITION_SIZE_PCT", 0.01)
                 qty = int((equity * pct) / price) if pct > 0 else 1
                 qty = max(1, min(qty, brain_config.STRATEGY_MAX_QTY))
-            # Global filter: when SPY below 200 MA, reduce long size
             if d.action == "buy" and getattr(brain_config, "SPY_200MA_REGIME_ENABLED", False) and _get_spy_below_200ma() is True:
                 mult = getattr(brain_config, "SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER", 0.5)
                 qty = max(1, int(qty * mult))
+            # Conviction: scale size by setup performance (+1 profit / -2 stop -> winning streak = larger size)
+            try:
+                from brain.conviction import conviction_multiplier
+                conv = conviction_multiplier(d.reason or "green_light_4pt")
+                qty = max(1, min(brain_config.STRATEGY_MAX_QTY, int(qty * conv)))
+            except Exception:
+                pass
             d = Decision(d.action, d.symbol, qty, d.reason)
-            log.info("position_size equity=%.2f price=%.2f -> qty=%d", equity, price, qty)
+            log.info("position_size equity=%.2f price=%.2f pct=%.0f%% -> qty=%d", equity, price, pct * 100, qty)
+        else:
+            log.warning("position_size skipped (no equity); placing 1 share. Set EQUITY_OVERRIDE=100000 if account API unavailable.")
     if place_order(d, current_price=price):
         last_order_time_by_symbol[d.symbol] = now
+        # Experience buffer: record entry/exit snapshot for strategy optimizer
+        try:
+            from brain.experience_buffer import record_entry, record_exit
+            ctx = snapshot_context or {}
+            if d.action == "buy" and price and price > 0:
+                record_entry(
+                    d.symbol, price, d.qty, d.reason,
+                    technical_score=ctx.get("technical_score"),
+                    ofi=ctx.get("ofi"),
+                    prob_gain=ctx.get("prob_gain"),
+                    structure_ok=ctx.get("structure_ok"),
+                    regime=ctx.get("regime"),
+                )
+            elif d.action == "sell" and price and price > 0:
+                record_exit(
+                    d.symbol, price, d.qty, d.reason,
+                    unrealized_pl_pct=ctx.get("unrealized_pl_pct"),
+                    technical_score=ctx.get("technical_score"),
+                    ofi=ctx.get("ofi"),
+                    regime=ctx.get("regime"),
+                )
+                # Reinforcement: record outcome for conviction (setup_type = reason)
+                try:
+                    from brain.conviction import record_outcome
+                    record_outcome(d.reason or "exit", d.reason, ctx.get("unrealized_pl_pct"))
+                except Exception:
+                    pass
+        except Exception as e:
+            log.debug("experience_buffer record skipped: %s", e)
         return True
     return False
 
@@ -315,7 +367,7 @@ def _run_scale_out_check() -> None:
                 sell_qty = min(sell_qty, pos_qty)
                 d = Decision("sell", sym, sell_qty, f"scale_out_{int(level*100)}pct")
                 log.info("scale_out symbol=%s pl_pct=%.2f%% sell qty=%d", sym, pl_pct * 100, sell_qty)
-                _try_place_order(d, skip_cooldown=True)
+                _try_place_order(d, skip_cooldown=True, snapshot_context={"unrealized_pl_pct": pl_pct})
                 done.add(level)
                 break
 
@@ -351,7 +403,7 @@ def run_stop_loss_check() -> None:
             if d.reason == "scale_out_50_at_vwap":
                 _scaled_50_at_vwap.add(sym)
             log.warning("stop_loss symbol=%s pl_pct=%.2f%% sell qty=%d reason=%s", d.symbol, pl_pct * 100, d.qty, d.reason)
-            _try_place_order(d)
+            _try_place_order(d, snapshot_context={"unrealized_pl_pct": pl_pct, "ofi": combined.get("ofi")})
 
 
 def _is_in_closing_window() -> bool:
@@ -493,7 +545,14 @@ def run_strategy_for_symbols(symbols: list) -> None:
             "strategy symbol=%s technical=%.2f prob_gain=%.2f -> action=%s qty=%d reason=%s",
             d.symbol, tech or 0, prob, d.action, d.qty, d.reason,
         )
-        _try_place_order(d, price_override=cur_price)
+        snapshot_ctx = {
+            "technical_score": tech,
+            "ofi": combined.get("ofi"),
+            "prob_gain": prob,
+            "structure_ok": _structure_ok,
+            "unrealized_pl_pct": pl_pct,
+        }
+        _try_place_order(d, price_override=cur_price, snapshot_context=snapshot_ctx)
     log.info("latency step=strategy_run symbols=%d ms=%.1f", len(symbols), (_PERF() - t0) * 1000)
 
 

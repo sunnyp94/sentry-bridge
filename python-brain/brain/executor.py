@@ -50,7 +50,10 @@ def get_account_equity() -> Optional[float]:
         eq = getattr(acc, "equity", None)
         if eq is None:
             return None
-        return float(eq)
+        try:
+            return float(eq)
+        except (TypeError, ValueError):
+            return None
     except Exception:
         return None
 
