@@ -25,12 +25,11 @@ func Load() (*Config, error) {
 	}
 	tickers := loadTickers()
 	stream := strings.ToLower(os.Getenv("STREAM")) != "false" && strings.ToLower(os.Getenv("STREAM")) != "0"
-	// Alpaca Algo Trader Plus ($99/mo) helps with: (1) ALPACA_DATA_FEED=sip = full US SIP (all exchanges, not just IEX).
-	// (2) Higher rate limits (10k/min), unlimited WebSocket symbols, no 15-min delay. (3) Better fill context and
-	// execution data. OFI is still computed locally from trades/quotes (Alpaca does not provide trade-side in market data).
-	dataFeed := strings.ToLower(os.Getenv("ALPACA_DATA_FEED"))
-	if dataFeed != "sip" && dataFeed != "iex" {
-		dataFeed = "iex"
+	// Default SIP (full US consolidated). Set ALPACA_DATA_FEED=iex for IEX-only (free tier).
+	// Alpaca Pro/Algo Trader Plus: SIP, higher rate limits, no 15-min delay. OFI computed locally from trades/quotes.
+	dataFeed := strings.ToLower(strings.TrimSpace(os.Getenv("ALPACA_DATA_FEED")))
+	if dataFeed != "iex" && dataFeed != "sip" {
+		dataFeed = "sip"
 	}
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
@@ -130,7 +129,7 @@ type Config struct {
 	TradingBaseURL       string   // e.g. https://paper-api.alpaca.markets (positions, orders)
 	Tickers              []string // Symbols to stream and send to brain
 	StreamingMode        bool     // true = WebSocket streaming; false = one-shot REST
-	DataFeed             string   // "iex" or "sip" — sip = full US exchanges (Algo Trader Plus)
+	DataFeed             string   // "sip" (default) or "iex" — sip = full US consolidated tape
 	RedisURL             string   // Optional Redis for replay/other consumers
 	RedisStream          string   // Stream name, default market:updates
 	BrainCmd             string   // Command to start Python brain, e.g. python3 python-brain/consumer.py

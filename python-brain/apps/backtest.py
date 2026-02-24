@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Backtest the strategy on real historical daily bars from Alpaca (Data API: IEX or SIP).
+Backtest the strategy on real historical daily bars from Alpaca (Data API: SIP by default, or IEX if ALPACA_DATA_FEED=iex).
 Uses same decide() and config as production. No news in backtest so sentiment = technical (RSI + MACD + patterns) + momentum proxy.
 Run: python3 apps/backtest.py [--symbols ...] [--days 90] [--years 2]
 """

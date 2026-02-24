@@ -232,7 +232,7 @@ All components use structured logging with configurable levels.
 
 By default the app runs in **streaming mode**:
 
-- **Price** – WebSocket to Alpaca stock stream (`v2/iex`): real-time trades and quotes; each update is printed (throttled to 1 per symbol per second).
+- **Price** – WebSocket to Alpaca stock stream (`v2/sip` by default, or `v2/iex` if `ALPACA_DATA_FEED=iex`): real-time trades and quotes; each update is printed (throttled to 1 per symbol per second).
 - **News** – WebSocket to Alpaca news stream (`v1beta1/news`): headlines printed as they arrive.
 - **Volatility** – Refreshed every **5 minutes** via REST (30-day daily bars, annualized). Printed on startup and then every 5 min.
 

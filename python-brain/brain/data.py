@@ -64,7 +64,8 @@ def get_bars(symbols: List[str], days: int) -> Dict[str, pd.DataFrame]:
     client = StockHistoricalDataClient(key, secret, url_override=url_override) if url_override else StockHistoricalDataClient(key, secret)
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
-    feed = DataFeed.SIP if os.environ.get("ALPACA_DATA_FEED", "").lower() == "sip" else DataFeed.IEX
+    # Default SIP (full US). Set ALPACA_DATA_FEED=iex for IEX-only (free tier).
+    feed = DataFeed.IEX if os.environ.get("ALPACA_DATA_FEED", "").strip().lower() == "iex" else DataFeed.SIP
     req = StockBarsRequest(
         symbol_or_symbols=symbols,
         timeframe=TimeFrame.Day,

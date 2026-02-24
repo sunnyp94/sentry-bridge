@@ -16,7 +16,7 @@ type PriceStream struct {
 	baseURL   string
 	keyID     string
 	secretKey string
-	feed      string // "iex" or "sip"
+	feed      string // "sip" (default) or "iex"
 	symbols   []string
 
 	// Last price per symbol (mid from quote or last trade)
@@ -28,10 +28,10 @@ type PriceStream struct {
 	OnQuote func(symbol string, bid, ask float64, bidSize, askSize int, t time.Time)
 }
 
-// NewPriceStream creates a stream for v2/iex (or v2/sip). Use feed "iex" for free tier.
+// NewPriceStream creates a stream for v2/sip (default) or v2/iex. Set ALPACA_DATA_FEED=iex for free tier.
 func NewPriceStream(streamBaseURL, keyID, secretKey, feed string, symbols []string) *PriceStream {
 	if feed == "" {
-		feed = "iex"
+		feed = "sip"
 	}
 	return &PriceStream{
 		baseURL:   streamBaseURL,
