@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Pre-market discovery: run from container start until market open (9:30 ET).
-- From 8:00 ET: run discovery every 5 min, write Priority Watchlist to ACTIVE_SYMBOLS_FILE.
+- From 7:00 ET: run discovery every 5 min, write Priority Watchlist to ACTIVE_SYMBOLS_FILE.
 - At 9:30 ET: run discovery once (handoff), then exit so entrypoint can start the Go engine.
 - If already at or after 9:30 when started: run discovery once and exit (Go will read the file).
 All times Eastern. Run this once; at 9:30 the engine starts and watches the hand-picked list.
@@ -62,7 +62,7 @@ def main() -> int:
     if not out_path:
         print("run_discovery_until_open: set ACTIVE_SYMBOLS_FILE", file=sys.stderr, flush=True)
         return 1
-    start_et = _parse_et_time(getattr(brain_config, "DISCOVERY_START_ET", "08:00"))
+    start_et = _parse_et_time(getattr(brain_config, "DISCOVERY_START_ET", "07:00"))
     end_et = _parse_et_time(getattr(brain_config, "DISCOVERY_END_ET", "09:30"))
     interval_min = getattr(brain_config, "DISCOVERY_INTERVAL_MIN", 5)
     top_n = getattr(brain_config, "DISCOVERY_TOP_N", 10)
@@ -101,7 +101,7 @@ def main() -> int:
             log("Watching: %s" % _read_watchlist(out_path))
             return 0
         if now_min < start_min:
-            # Sleep until 8:00 ET
+            # Sleep until discovery start (e.g. 7:00 ET)
             from datetime import datetime, timedelta
             today_start = now.replace(hour=start_et[0], minute=start_et[1], second=0, microsecond=0)
             secs = (today_start - now).total_seconds()
@@ -109,7 +109,7 @@ def main() -> int:
                 log("sleeping until %02d:%02d ET (%.0fs)" % (start_et[0], start_et[1], secs))
                 time.sleep(min(secs, 3600))
             continue
-        # In window [8:00, 9:30): run discovery every 5 min
+        # In window [start_et, 9:30): run discovery every 5 min
         log("Running discovery (fetching bars, scoring)...")
         try:
             run_discovery(top_n=top_n, out_path=out_path)

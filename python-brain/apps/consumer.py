@@ -744,7 +744,7 @@ def _run_scanner_at_startup() -> None:
 
 
 def _parse_run_at_et(s: str) -> Optional[tuple]:
-    """Parse SCREENER_RUN_AT_ET (e.g. '08:00' or '8:00') -> (hour, minute) or None."""
+    """Parse SCREENER_RUN_AT_ET (e.g. '07:00' or '7:00') -> (hour, minute) or None."""
     s = (s or "").strip()
     if not s:
         return None
@@ -800,7 +800,7 @@ def main() -> None:
     from brain.log_config import init as init_logging
     init_logging()
 
-    # Opportunity engine: scanner or two-stage discovery (8:00–9:30 ET) + handoff at 9:30.
+    # Opportunity engine: scanner or two-stage discovery (7:00–9:30 ET) + handoff at 9:30.
     if getattr(brain_config, "OPPORTUNITY_ENGINE_ENABLED", False):
         path = getattr(brain_config, "ACTIVE_SYMBOLS_FILE", "").strip()
         run_at_et = getattr(brain_config, "SCREENER_RUN_AT_ET", "").strip()
@@ -809,7 +809,7 @@ def main() -> None:
             if discovery_enabled and ZoneInfo:
                 from brain.discovery import _in_discovery_window
                 if _in_discovery_window(
-                    discovery_parse_et(getattr(brain_config, "DISCOVERY_START_ET", "08:00")),
+                    discovery_parse_et(getattr(brain_config, "DISCOVERY_START_ET", "07:00")),
                     discovery_parse_et(getattr(brain_config, "DISCOVERY_END_ET", "09:30")),
                 ):
                     run_discovery(top_n=getattr(brain_config, "DISCOVERY_TOP_N", 10))
@@ -821,7 +821,7 @@ def main() -> None:
             t = threading.Thread(target=_scheduler_loop, daemon=True)
             t.start()
         if path and discovery_enabled:
-            start_et = discovery_parse_et(getattr(brain_config, "DISCOVERY_START_ET", "08:00"))
+            start_et = discovery_parse_et(getattr(brain_config, "DISCOVERY_START_ET", "07:00"))
             end_et = discovery_parse_et(getattr(brain_config, "DISCOVERY_END_ET", "09:30"))
             interval_min = getattr(brain_config, "DISCOVERY_INTERVAL_MIN", 5)
             engine = DiscoveryEngine(

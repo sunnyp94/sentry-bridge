@@ -1,5 +1,5 @@
 """
-Two-Stage Intelligence: Discovery Loop (pre-market 8:00–9:30 ET).
+Two-Stage Intelligence: Discovery Loop (pre-market 7:00–9:30 ET).
 
 Runs every 5 minutes in the discovery window. Scores universe by:
 - Relative Volume (RV): latest day volume vs 20-day average (institutional activity proxy).

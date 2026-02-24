@@ -216,10 +216,10 @@ ACTIVE_SYMBOLS_FILE = os.environ.get("ACTIVE_SYMBOLS_FILE", "").strip()  # e.g. 
 SCREENER_RUN_AT_ET = os.environ.get("SCREENER_RUN_AT_ET", "09:30").strip()  # "09:30" = market open ET
 
 # -----------------------------------------------------------------------------
-# Two-Stage Intelligence: Discovery (8:00–9:30 ET) → Execution (9:30+)
+# Two-Stage Intelligence: Discovery (7:00–9:30 ET) → Execution (9:30+)
 # -----------------------------------------------------------------------------
 DISCOVERY_ENABLED = _bool("DISCOVERY_ENABLED", "false")
-DISCOVERY_START_ET = os.environ.get("DISCOVERY_START_ET", "08:00").strip()
+DISCOVERY_START_ET = os.environ.get("DISCOVERY_START_ET", "07:00").strip()
 DISCOVERY_END_ET = os.environ.get("DISCOVERY_END_ET", "09:30").strip()
 DISCOVERY_INTERVAL_MIN = _int("DISCOVERY_INTERVAL_MIN", "5")
 DISCOVERY_TOP_N = _int("DISCOVERY_TOP_N", "10")
