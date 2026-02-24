@@ -21,9 +21,14 @@ if str(_root) not in sys.path:
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+
+try:
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import LabelEncoder
+    _HAS_SKLEARN = True
+except ImportError:
+    _HAS_SKLEARN = False
 
 from brain.experience_buffer import load_buffer
 
@@ -123,6 +128,9 @@ def run_feature_importance(buffer_path: Path, min_samples: int = 20) -> dict:
     Run Random Forest feature importance on the experience buffer.
     Returns dict with feature_importances, model score, and suggested filter rules.
     """
+    if not _HAS_SKLEARN:
+        log.warning("scikit-learn not installed; run: pip install scikit-learn")
+        return {}
     records = load_buffer(path=buffer_path)
     if len(records) < min_samples:
         log.warning("Not enough records (%d < %d); skipping optimizer run.", len(records), min_samples)
@@ -144,7 +152,7 @@ def run_feature_importance(buffer_path: Path, min_samples: int = 20) -> dict:
         log.info("  feature_importance %s=%.3f", name, val)
 
     # Self-correction: find setups with low success rate when a condition holds
-    df = pd.DataFrame(X, columns=X.columns)
+    df = X.copy()
     df["label"] = le.inverse_transform(y)
     success_rate = df["label"].value_counts(normalize=True).get("success", 0.0)
     log.info("Overall success rate in buffer: %.1f%%", success_rate * 100)

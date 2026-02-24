@@ -237,6 +237,13 @@ OVERNIGHT_CARRY_ENABLED = _bool("OVERNIGHT_CARRY_ENABLED", "true")
 CLOSE_LOSSES_BY_ET = os.environ.get("CLOSE_LOSSES_BY_ET", "15:50").strip()  # in this window, close only losing positions
 
 # -----------------------------------------------------------------------------
+# Recursive strategy optimizer (experience buffer, conviction, shadow)
+# -----------------------------------------------------------------------------
+EXPERIENCE_BUFFER_ENABLED = _bool("EXPERIENCE_BUFFER_ENABLED", "true")
+SHADOW_STRATEGY_ENABLED = _bool("SHADOW_STRATEGY_ENABLED", "true")
+CONVICTION_SIZING_ENABLED = _bool("CONVICTION_SIZING_ENABLED", "true")
+
+# -----------------------------------------------------------------------------
 # Backtest accuracy: execution and costs
 # -----------------------------------------------------------------------------
 # Fill at next bar's open (removes look-ahead; signal at close T -> fill at open T+1)

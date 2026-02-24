@@ -93,4 +93,15 @@ The strategy can use four professional layers so execution is driven by how pric
 
 See `brain/signals/microstructure.py` and `.env.example` for details.
 
+### Recursive Strategy Optimizer
+
+The brain includes an optional **experience buffer**, **attribution engine**, **shadow strategy**, and **conviction sizing** to reduce strategy decay:
+
+| Component | Role | Config / Script |
+|-----------|------|-----------------|
+| **Experience Buffer** | Saves a `MarketSnapshot` (indicators, regime) on every entry and exit to `data/experience_buffer.jsonl`. | `EXPERIENCE_BUFFER_ENABLED=true` (default). Disable with env `EXPERIENCE_BUFFER_ENABLED=false`. |
+| **Attribution Engine** | Runs Random Forest feature importance on the buffer; suggests filter rules when a setup has &lt;40% success under a condition (e.g. block when ATR in top 10th percentile). | `python3 python-brain/apps/strategy_optimizer.py [--buffer path] [--min-samples 20] [--write-rules]`. Requires `scikit-learn`. |
+| **Shadow Strategy** | Tracks 3 ghost models (tighter/wide/scalp stop–TP) in parallel with live. No real orders; logs when a shadow outperforms over 30 ghost trades. | `SHADOW_STRATEGY_ENABLED=true` (default). |
+| **Conviction** | Reward +1 for profit, −2 for stop loss. Per-setup conviction scales position size (winning streak → up to 1.5×; losing → down to 0.5×). | `CONVICTION_SIZING_ENABLED=true` (default). |
+
 Install deps first: `python3 -m pip install -r requirements.txt` (from repo root or python-brain).

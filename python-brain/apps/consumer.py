@@ -337,6 +337,15 @@ def _try_place_order(
                     pass
         except Exception as e:
             log.debug("experience_buffer record skipped: %s", e)
+        # Shadow strategy: record ghost buy/sell for 3 shadow models (A/B testing)
+        try:
+            from brain.shadow_strategy import shadow_on_buy, shadow_on_sell, shadow_update, check_promotion, get_shadow_stats
+            if d.action == "buy" and price and price > 0:
+                shadow_on_buy(d.symbol, price, d.qty)
+            elif d.action == "sell" and price and price > 0:
+                shadow_on_sell(d.symbol, price, d.reason)
+        except Exception as e:
+            log.debug("shadow_strategy record skipped: %s", e)
         return True
     return False
 
@@ -553,6 +562,13 @@ def run_strategy_for_symbols(symbols: list) -> None:
             "unrealized_pl_pct": pl_pct,
         }
         _try_place_order(d, price_override=cur_price, snapshot_context=snapshot_ctx)
+        # Shadow: update ghost exit rules (tighter/loose stop-TP) when we have a position and price
+        if pos_qty > 0 and cur_price is not None and cur_price > 0:
+            try:
+                from brain.shadow_strategy import shadow_update
+                shadow_update(sym, cur_price)
+            except Exception:
+                pass
     log.info("latency step=strategy_run symbols=%d ms=%.1f", len(symbols), (_PERF() - t0) * 1000)
 
 
