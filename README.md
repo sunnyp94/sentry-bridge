@@ -34,7 +34,7 @@ Sentry Bridge is an **automated trading system** that streams market data from *
 - **Single Docker stack** – Go engine + **Redis** + Python brain in one `docker compose` setup.
 - **Redis** – Runs **locally in the same Docker Compose** on the GCP VM for **low latency** (no external Redis required for production).
 - **GCP VM** – One-command startup: install Docker, clone repo, configure `.env`, run `docker compose up -d --build`. Containers use `restart: unless-stopped`.
-- **Deploy on every merge to main** – GitHub Actions workflow SSHs to the VM and runs `git fetch` / `git reset --hard origin/main` and `docker compose up -d --build`.
+- **Deploy on every merge to main** – GitHub Actions builds the image in CI, pushes to ghcr.io, then SSHs to the VM and runs `git` update, `docker compose pull`, and `docker compose up -d` (no build on the VM).
 
 ## Prerequisites
 
@@ -99,9 +99,9 @@ One command runs the full stack (Go + Redis + Python brain) the same way locally
 
 The recommended production setup is a **GCP Compute Engine VM** running the full Docker stack. **Redis runs in the same Docker Compose** on the VM (no separate Redis Cloud or external Redis), so event flow stays on the same machine for **faster latency**. Compose uses `restart: unless-stopped`, so containers come back after a VM reboot as long as Docker is enabled.
 
-1. **Create a VM** (e.g. **Ubuntu 22.04**, e2-medium or larger, in a region you prefer).
+1. **Create a VM** (e.g. **Ubuntu 22.04** or **Debian**, e2-standard-2 or e2-standard-4 recommended, in a region you prefer).
 
-2. **SSH in and install Docker** (and Compose v2):
+2. **SSH in and install Docker** (and Compose v2). For **Ubuntu**:
    ```bash
    sudo apt-get update && sudo apt-get install -y ca-certificates curl gnupg
    sudo install -m 0755 -d /etc/apt/keyrings
@@ -111,7 +111,7 @@ The recommended production setup is a **GCP Compute Engine VM** running the full
    sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
    sudo usermod -aG docker "$USER"
    ```
-   Log out and back in (or `newgrp docker`) so `docker` runs without `sudo`.
+   For **Debian**, use the same pattern but with `https://download.docker.com/linux/debian` and `$(. /etc/os-release && echo "$VERSION_CODENAME")` in the `echo` line. Log out and back in (or `newgrp docker`) so `docker` runs without `sudo`.
 
 3. **Clone the repo and configure env:**
    ```bash
@@ -121,22 +121,19 @@ The recommended production setup is a **GCP Compute Engine VM** running the full
    # Do not set REDIS_URL or BRAIN_CMD — compose sets them for the app container.
    ```
 
-4. **Start the full stack (single command):**
-   ```bash
-   docker compose up -d --build
-   ```
-   This builds the app image (Go + Python brain), starts Redis in the same stack, then the app. Redis runs locally on the VM for low latency. The entrypoint runs the scanner if `ACTIVE_SYMBOLS_FILE` is set, then starts the Go engine; Go starts the Python brain via `BRAIN_CMD`. Logs: `docker compose logs -f app`.
+4. **Start the full stack**  
+   If you use **Deploy on every merge to main** (below), the first workflow run will pull the pre-built image and start the stack—no build on the VM. Otherwise run once: `docker compose up -d --build` (ensure the VM has enough disk). Redis runs locally on the VM. Logs: `docker compose logs -f app`.
 
-5. **Optional:** Ensure Docker starts on boot (Ubuntu often does this by default):
+5. **Optional:** Ensure Docker starts on boot:
    ```bash
    sudo systemctl enable docker
    ```
 
-To stop: `docker compose down`. To update: `git pull && docker compose up -d --build`.
+To stop: `docker compose down`. To update: with the workflow, push to `main`; or on the VM run `git pull` then `docker compose pull && docker compose up -d` (with `DOCKER_IMAGE` set to your ghcr.io image when using the pre-built image).
 
 #### Deploy on every merge to main
 
-The workflow **builds the app image in GitHub Actions**, pushes it to **GitHub Container Registry (ghcr.io)**, then SSHs to the VM and runs **pull + up** (no build on the VM, so the VM needs less disk and never runs out of space during deploy). One-time setup:
+The workflow **builds the app image in GitHub Actions**, pushes it to **GitHub Container Registry (ghcr.io)**, then SSHs to the VM and runs **pull + up** (no build on the VM, so the VM needs less disk and never runs out of space during deploy). One-time setup (see also [docs/DEPLOY_GCP.md](docs/DEPLOY_GCP.md) for a full step-by-step):
 
 1. **VM and app**  
    Complete the GCP VM steps above (create VM, install Docker, clone repo, configure `.env`). You can run `docker compose up -d --build` once locally on the VM to verify, or wait for the first automated deploy. Note the VM’s external IP.
@@ -149,12 +146,12 @@ The workflow **builds the app image in GitHub Actions**, pushes it to **GitHub C
    Add the **public** key (`deploy_key.pub`) to the VM’s `~/.ssh/authorized_keys` (as the user that runs Docker).
 
 3. **GitHub repository secrets**  
-   In the repo: **Settings → Secrets and variables → Actions**. Add:
-   - `GCP_VM_HOST` – VM’s external IP (e.g. `34.123.45.67`).
-   - `GCP_VM_USER` – SSH user (e.g. `ubuntu` or `sunnyakpatel`).
-   - `GCP_SSH_PRIVATE_KEY` – Full contents of the **private** key file (`deploy_key`).
-   - `GHCR_PAT` – A **Personal Access Token** with `read:packages` so the VM can pull the image from ghcr.io. Create under GitHub **Settings → Developer settings → Personal access tokens**; give it `read:packages` and no other scopes. Use a fine-grained token with read access to the repo’s packages, or a classic token with `read:packages`.
-   - `GCP_REPO_PATH` (optional) – Path to the repo on the VM; default is `~/sentry-bridge`.
+   In the repo: **Settings** → **Secrets and variables** → **Actions** → **New repository secret**. Add each:
+   - **`GCP_VM_HOST`** – VM’s **External IP** from GCP Console → Compute Engine → VM instances (e.g. `34.145.173.89`).
+   - **`GCP_VM_USER`** – The Linux user you use to SSH (e.g. `ubuntu` on Ubuntu images, `sunnyakpatel` on Debian; see your SSH prompt).
+   - **`GCP_SSH_PRIVATE_KEY`** – On your machine run `cat deploy_key` and paste the **entire** output (including `-----BEGIN OPENSSH PRIVATE KEY-----` and `-----END OPENSSH PRIVATE KEY-----`).
+   - **`GHCR_PAT`** – A Personal Access Token with `read:packages` so the VM can pull from ghcr.io. GitHub → **Settings** (your profile) → **Developer settings** → **Personal access tokens** → generate with `read:packages`.
+   - **`GCP_REPO_PATH`** (optional) – Repo path on the VM if not `~/sentry-bridge` (e.g. `/home/sunnyakpatel/sentry-bridge`).
 
 4. **Result**  
    Every push (or merge) to `main`: (1) workflow builds the Docker image and pushes to `ghcr.io/<owner>/<repo>/sentry-bridge-app:latest`, (2) SSHs to the VM, updates the repo to `origin/main`, logs in to ghcr.io with `GHCR_PAT`, runs `docker compose pull` and `docker compose up -d`. You can also run the workflow manually from **Actions** → **Deploy to GCP VM** → **Run workflow**.
