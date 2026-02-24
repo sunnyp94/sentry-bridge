@@ -277,6 +277,7 @@ def decide(
         if not rsi_overbought_ok:
             return Decision("hold", symbol, 0, "green_light_rsi_overbought")
         if prob_gain >= prob_thresh:
+            # qty is overwritten by consumer from 5% equity position sizing; min(1, max_qty) is placeholder for logs
             return Decision("buy", symbol, min(1, max_qty), "green_light_4pt")
 
     return Decision("hold", symbol, 0, "green_light_not_met")

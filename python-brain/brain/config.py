@@ -62,23 +62,22 @@ SENTIMENT_SELL_THRESHOLD = _float("SENTIMENT_SELL_THRESHOLD", "-0.32")  # reserv
 PROB_GAIN_SELL_THRESHOLD = _float("PROB_GAIN_SELL_THRESHOLD", "0.32")  # reserved
 
 # -----------------------------------------------------------------------------
-# Sizing and session — same for paper and live: 5% of equity per trade
+# Sizing and session — live/paper consumer: ALWAYS 5% of account equity per buy (no multipliers, no safeguards)
 # -----------------------------------------------------------------------------
 STRATEGY_MAX_QTY = _int("STRATEGY_MAX_QTY", "12")
-# 0 = always use POSITION_SIZE_PCT (5%); >0 = use ATR risk sizing when ATR available (backtest)
+# RISK_PCT_PER_TRADE: backtest-only (ATR risk sizing). Live consumer ignores; uses POSITION_SIZE_PCT only.
 RISK_PCT_PER_TRADE = _float("RISK_PCT_PER_TRADE", "0")
-POSITION_SIZE_PCT = _float("POSITION_SIZE_PCT", "0.05")  # 5% of equity per position (paper and live)
+POSITION_SIZE_PCT = _float("POSITION_SIZE_PCT", "0.05")  # 5% of equity per buy — consumer uses this only; no SPY/conviction/correlation
 STRATEGY_REGULAR_SESSION_ONLY = _bool("STRATEGY_REGULAR_SESSION_ONLY", "true")
 ORDER_COOLDOWN_SEC = _int("ORDER_COOLDOWN_SEC", "30")  # seconds between orders per symbol (liberal: 30)
 STRATEGY_INTERVAL_SEC = _int("STRATEGY_INTERVAL_SEC", "45")  # run strategy (Green Light) for watchlist every N seconds (not news-only)
-# Kelly Criterion: scale risk by optimal fraction from win rate and avg win/loss (cap at KELLY_FRACTION_CAP)
+# Kelly / correlation: backtest-only. Live consumer does NOT use these for buy size; always 5% of equity.
 KELLY_SIZING_ENABLED = _bool("KELLY_SIZING_ENABLED", "false")
-KELLY_FRACTION_CAP = _float("KELLY_FRACTION_CAP", "0.25")  # max fraction of capital per trade (quarter-Kelly)
-KELLY_LOOKBACK_TRADES = _int("KELLY_LOOKBACK_TRADES", "50")  # use last N round-trips for W and R
-# Correlation: reduce size when adding position in symbol highly correlated with existing positions
+KELLY_FRACTION_CAP = _float("KELLY_FRACTION_CAP", "0.25")
+KELLY_LOOKBACK_TRADES = _int("KELLY_LOOKBACK_TRADES", "50")
 CORRELATION_CHECK_ENABLED = _bool("CORRELATION_CHECK_ENABLED", "false")
-CORRELATION_THRESHOLD = _float("CORRELATION_THRESHOLD", "0.7")  # if corr > this with any open position, reduce size
-CORRELATION_SIZE_REDUCTION = _float("CORRELATION_SIZE_REDUCTION", "0.5")  # multiply qty by this when correlated
+CORRELATION_THRESHOLD = _float("CORRELATION_THRESHOLD", "0.7")
+CORRELATION_SIZE_REDUCTION = _float("CORRELATION_SIZE_REDUCTION", "0.5")
 
 # -----------------------------------------------------------------------------
 # Limit orders (reduce slippage; buy below mid, sell above mid)
@@ -116,11 +115,11 @@ REGIME_TREND_SMA_PERIOD = _int("REGIME_TREND_SMA_PERIOD", "20")
 REGIME_VOLATILITY_PCT = _float("REGIME_VOLATILITY_PCT", "70")  # above this percentile = choppy → mean reversion
 
 # -----------------------------------------------------------------------------
-# Global filter: SPY 200-day MA (when SPY < 200 MA: more cautious on longs, more aggressive on shorts when added)
+# Global filter: SPY 200-day MA. Does NOT affect buy size in live consumer (buy size is always 5% of equity).
 # -----------------------------------------------------------------------------
 SPY_200MA_REGIME_ENABLED = _bool("SPY_200MA_REGIME_ENABLED", "false")
 SPY_BELOW_200MA_Z_TIGHTEN = _float("SPY_BELOW_200MA_Z_TIGHTEN", "-2.8")  # reserved
-SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER = _float("SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER", "0.5")  # used for sizing
+SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER = _float("SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER", "0.5")  # backtest only; consumer ignores for sizing
 
 # -----------------------------------------------------------------------------
 # Kill switch (no new buys when very bad news or sharp negative returns)
@@ -241,7 +240,7 @@ CLOSE_LOSSES_BY_ET = os.environ.get("CLOSE_LOSSES_BY_ET", "15:50").strip()  # in
 # -----------------------------------------------------------------------------
 EXPERIENCE_BUFFER_ENABLED = _bool("EXPERIENCE_BUFFER_ENABLED", "true")
 SHADOW_STRATEGY_ENABLED = _bool("SHADOW_STRATEGY_ENABLED", "true")
-CONVICTION_SIZING_ENABLED = _bool("CONVICTION_SIZING_ENABLED", "true")
+CONVICTION_SIZING_ENABLED = _bool("CONVICTION_SIZING_ENABLED", "true")  # records outcomes only; does NOT scale buy size (always 5% equity)
 
 # -----------------------------------------------------------------------------
 # Backtest accuracy: execution and costs
