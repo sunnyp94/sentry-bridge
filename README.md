@@ -1,6 +1,40 @@
 # Sentry Bridge
 
-Go engine that pulls **market news**, **price**, and **volatility** from Alpaca Markets for a configurable set of stock tickers. Currently set up for **Alpaca sandbox** (paper trading); production/live can be enabled later.
+Sentry Bridge is an **automated trading system** that streams market data from **Alpaca**, runs a **Python strategy brain** (signals, rules, paper or live orders), and supports **pre-market discovery**, **backtesting**, and **one-command deployment** on **Google Cloud (GCP)**. It is built for **Alpaca paper trading** by default; you can switch to live keys when ready.
+
+## Features
+
+### Market data (Alpaca)
+
+- **Real-time trades and quotes** – WebSocket to Alpaca; **SIP** (full US consolidated tape) by default for accurate volume and NBBO; set `ALPACA_DATA_FEED=iex` for the free tier.
+- **News** – WebSocket stream of headlines and summaries (used for sentiment).
+- **Volatility** – 30-day annualized volatility from daily bars (REST, refreshed every 5 minutes).
+- Optional **one-shot REST mode** (no WebSockets) via `STREAM=false`.
+
+### Discovery and opportunity engine
+
+- **Pre-market discovery** (7:00–9:30 ET) – On full market days, a screener runs every 5 minutes and writes a **priority watchlist** to `ACTIVE_SYMBOLS_FILE`. At 9:30 ET the Go engine starts with that list. Enable with `DISCOVERY_ENABLED=true` and `ACTIVE_SYMBOLS_FILE`.
+- **One-shot scanner** – Alternatively, a Z-score and volume-spike screener can run once at container start or on a schedule (no discovery window).
+
+### Strategy brain (Python)
+
+- **Composite score** – News sentiment (FinBERT/VADER), momentum (1m/5m returns), optional technicals (RSI, MACD, patterns). Consensus: require N-of-3 sources positive before buy.
+- **Rules** – Daily cap (stop new buys when daily PnL ≥ 0.2%), drawdown guard, kill switch (bad news or sharp drop), stop loss, session (regular-hours-only by default; post-close holds).
+- **Paper trading** – Market day orders on Alpaca paper account; positions/orders refreshed every 15s. Scale-out (sell 25% at 1%/2%/3%) and conviction-based sizing from recent outcomes.
+
+### Learning and optimization
+
+- **Experience buffer** – Saves a market snapshot on every entry and exit to `data/experience_buffer.jsonl` for later analysis.
+- **Strategy optimizer** – RF/XGBoost on the buffer; suggests filter rules and thresholds.
+- **Shadow strategy** – Three ghost models (tighter/wide/scalp) for A/B-style comparison; promotion logic to promote a shadow to primary.
+- **Conviction** – Position size scales with recent win/loss by setup type.
+
+### Deployment (GCP)
+
+- **Single Docker stack** – Go engine + **Redis** + Python brain in one `docker compose` setup.
+- **Redis** – Runs **locally in the same Docker Compose** on the GCP VM for **low latency** (no external Redis required for production).
+- **GCP VM** – One-command startup: install Docker, clone repo, configure `.env`, run `docker compose up -d --build`. Containers use `restart: unless-stopped`.
+- **Deploy on every merge to main** – GitHub Actions workflow SSHs to the VM and runs `git fetch` / `git reset --hard origin/main` and `docker compose up -d --build`.
 
 ## Prerequisites
 
@@ -27,10 +61,10 @@ Go engine that pulls **market news**, **price**, and **volatility** from Alpaca 
 
    Optional:
 
-   - **Tickers:** Come only from the scanner. Set `ACTIVE_SYMBOLS_FILE`, `OPPORTUNITY_ENGINE_ENABLED=true`, and `SCREENER_UNIVERSE` (e.g. `lab_12`, `sp400`, `nasdaq100`). Scanner runs at container start and 8am ET on full market days.  
+   - **Tickers:** Come from the scanner. Set `ACTIVE_SYMBOLS_FILE`, `OPPORTUNITY_ENGINE_ENABLED=true`, and `SCREENER_UNIVERSE` (e.g. `lab_12`, `sp400`, `nasdaq100`). With discovery enabled, the scanner runs 7:00–9:30 ET on full market days; otherwise it runs once at container start.  
    - `ALPACA_DATA_BASE_URL` – REST data API (default `https://data.alpaca.markets`)  
    - `STREAM` – set to `false` or `0` for one-shot REST only; default is streaming mode  
-   - `REDIS_URL` – Redis address for Python brain (e.g. `redis://localhost:6379`); if unset, events are not published  
+   - `REDIS_URL` – Set by Docker Compose for the app container (e.g. `redis://redis:6379`). Do not set in `.env` when using compose; the stack runs Redis locally for low latency.  
    - `REDIS_STREAM` – stream name (default `market:updates`)  
    - `APCA_API_BASE_URL` – Alpaca Trading API for positions/orders (default `https://paper-api.alpaca.markets`)
 
@@ -42,12 +76,12 @@ One command runs the full stack (Go + Redis + Python brain) the same way locally
 
 1. **Create `.env`** in the project root with:
    - `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` (Alpaca)
-   - `ACTIVE_SYMBOLS_FILE`, `OPPORTUNITY_ENGINE_ENABLED=true`, `SCREENER_UNIVERSE=lab_12` (scanner runs at start and 8am ET on market days)
+   - `ACTIVE_SYMBOLS_FILE`, `OPPORTUNITY_ENGINE_ENABLED=true`, `SCREENER_UNIVERSE=lab_12` (scanner runs at start and 7:00 ET with discovery on market days)
    - Do **not** set `REDIS_URL` or `BRAIN_CMD` — the compose file sets them for the app container.
 
 2. **From the project root** (either command):
    ```bash
-   cd /Users/sunnypatel/Projects/sentry-bridge
+   cd /path/to/sentry-bridge
    docker compose up --build
    ```
    Or: `./run-docker.sh`
@@ -59,37 +93,11 @@ One command runs the full stack (Go + Redis + Python brain) the same way locally
    docker compose down
    ```
 
-**What runs:** The `app` container runs the Go binary; Go connects to the `redis` service and pipes events to the Python brain inside the same container. Redis is used for the stream (replay/other consumers).
-
-### Deploy (e.g. AWS with Redis Cloud)
-
-- **Same image:** Build and push your image (e.g. to ECR), then run it in ECS, App Runner, or EC2 in **us-east-1**.
-- **Redis:** Use **Redis Cloud** in the same region. Create a database, get the URL (e.g. `rediss://default:PASSWORD@host:port`).
-- **Environment:** Set at runtime (no `.env` in the container):
-  - `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`
-  - `REDIS_URL=<your-redis-cloud-url>`
-  - `BRAIN_CMD="python3 /app/python-brain/apps/consumer.py"`
-  - `ACTIVE_SYMBOLS_FILE`, `OPPORTUNITY_ENGINE_ENABLED=true`, `SCREENER_UNIVERSE` (tickers from scanner)
-- **Secrets:** Store Alpaca keys and Redis password in AWS Secrets Manager or Parameter Store and inject into the task/instance.
-- **Compose on a server:** You can run `docker compose` on an EC2 (or similar) and use an override for production:
-  - No local `redis` service; set `REDIS_URL` to Redis Cloud.
-  - Use `env_file` pointing to a prod env file or pass env from Secrets Manager.
-
-Example override for “app only + Redis Cloud” (no local Redis container):
-
-```bash
-# .env.production (or inject via your orchestrator)
-REDIS_URL=rediss://default:YOUR_PASSWORD@your-redis-cloud-host:port
-APCA_API_KEY_ID=...
-APCA_API_SECRET_KEY=...
-BRAIN_CMD="python3 /app/python-brain/apps/consumer.py"
-```
-
-Then run the app container with that env; point it at Redis Cloud instead of a local Redis.
+**What runs:** The `app` container runs the Go binary; Go connects to the `redis` service (in the same Compose stack) and pipes events to the Python brain. **Redis runs locally** in the stack for low latency; no external Redis is required.
 
 ### Deploy on a GCP VM (single-command startup)
 
-The same Docker setup runs on a GCP VM with one command. Compose uses `restart: unless-stopped`, so containers come back after a VM reboot as long as Docker is enabled.
+The recommended production setup is a **GCP Compute Engine VM** running the full Docker stack. **Redis runs in the same Docker Compose** on the VM (no separate Redis Cloud or external Redis), so event flow stays on the same machine for **faster latency**. Compose uses `restart: unless-stopped`, so containers come back after a VM reboot as long as Docker is enabled.
 
 1. **Create a VM** (e.g. **Ubuntu 22.04**, e2-medium or larger, in a region you prefer).
 
@@ -117,7 +125,7 @@ The same Docker setup runs on a GCP VM with one command. Compose uses `restart: 
    ```bash
    docker compose up -d --build
    ```
-   This builds the app image (Go + Python brain), starts Redis, then the app. The entrypoint runs the scanner if `ACTIVE_SYMBOLS_FILE` is set, then starts the Go engine; Go starts the Python brain via `BRAIN_CMD`. Logs: `docker compose logs -f app`.
+   This builds the app image (Go + Python brain), starts Redis in the same stack, then the app. Redis runs locally on the VM for low latency. The entrypoint runs the scanner if `ACTIVE_SYMBOLS_FILE` is set, then starts the Go engine; Go starts the Python brain via `BRAIN_CMD`. Logs: `docker compose logs -f app`.
 
 5. **Optional:** Ensure Docker starts on boot (Ubuntu often does this by default):
    ```bash
@@ -125,6 +133,34 @@ The same Docker setup runs on a GCP VM with one command. Compose uses `restart: 
    ```
 
 To stop: `docker compose down`. To update: `git pull && docker compose up -d --build`.
+
+#### Deploy on every merge to main
+
+A GitHub Actions workflow (`.github/workflows/deploy-gcp.yml`) deploys to this VM on every push to `main`. One-time setup:
+
+1. **VM and app**  
+   Complete the GCP VM steps above (create VM, install Docker, clone repo, configure `.env`, run `docker compose up -d --build` once). Note the VM’s external IP or hostname.
+
+2. **SSH key for GitHub Actions**  
+   On your machine, create a key pair used only for deploys (e.g. no passphrase for CI):
+   ```bash
+   ssh-keygen -t ed25519 -C "github-actions-deploy" -f deploy_key -N ""
+   ```
+   Add the **public** key to the VM (as the user that runs Docker):
+   ```bash
+   # On the VM (or from your machine: ssh user@VM_IP "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys")
+   echo "contents of deploy_key.pub" >> ~/.ssh/authorized_keys
+   ```
+
+3. **GitHub repository secrets**  
+   In the repo: **Settings → Secrets and variables → Actions**. Add:
+   - `GCP_VM_HOST` – VM’s external IP or hostname (e.g. `34.123.45.67`).
+   - `GCP_VM_USER` – SSH user (e.g. `ubuntu` for Ubuntu images).
+   - `GCP_SSH_PRIVATE_KEY` – Full contents of `deploy_key` (the private key).
+   - `GCP_REPO_PATH` (optional) – Path to the repo on the VM; default is `~/sentry-bridge`.
+
+4. **Result**  
+   Every push (or merge) to `main` runs the workflow: it SSHs into the VM, updates the repo to `origin/main`, and runs `docker compose up -d --build`. You can also trigger the same workflow manually from the **Actions** tab (**Deploy to GCP VM** → **Run workflow**).
 
 ---
 
@@ -145,7 +181,7 @@ Make sure `.env` contains your real Alpaca keys and scanner config (`ACTIVE_SYMB
 1. **From project root**, load env and run the Go engine (with optional brain):
 
    ```bash
-   cd /Users/sunnypatel/Projects/sentry-bridge
+   cd /path/to/sentry-bridge
    set -a && source .env && set +a && cd go-engine && go run .
    ```
 
@@ -162,14 +198,14 @@ Make sure `.env` contains your real Alpaca keys and scanner config (`ACTIVE_SYMB
 
 4. **Test the Python consumer alone** (no Go): pipe a few JSON lines into it to confirm it parses and prints:
    ```bash
-   cd /Users/sunnypatel/Projects/sentry-bridge
+   cd /path/to/sentry-bridge
    echo '{"type":"trade","ts":"2026-02-22T12:00:00Z","payload":{"symbol":"AAPL","price":178.5}}' | python3 python-brain/apps/consumer.py
    ```
    You should see one `[brain] TRADE AAPL ...` line.
 
 5. **Test end-to-end with synthetic data (no market hours):** When the market is closed (e.g. Sunday evening), use the replay script to run the full brain pipeline (composite → strategy → optional paper order):
    ```bash
-   cd /Users/sunnypatel/Projects/sentry-bridge
+   cd /path/to/sentry-bridge
    set -a && source .env && set +a
    python3 python-brain/apps/replay_e2e.py | python3 python-brain/apps/consumer.py
    ```
@@ -197,14 +233,14 @@ To verify that events (including news) flow from Go to Redis to Python:
 
 3. **Terminal 1 — Go (writes to Redis):**
    ```bash
-   cd /Users/sunnypatel/Projects/sentry-bridge
+   cd /path/to/sentry-bridge
    set -a && source .env && set +a && cd go-engine && go run .
    ```
    You should see `Redis stream: market:updates` and Go logs. News, trades, quotes, etc. are written to the stream.
 
 4. **Terminal 2 — Python (reads from Redis):**
    ```bash
-   cd /Users/sunnypatel/Projects/sentry-bridge/python-brain
+   cd /path/to/sentry-bridge/python-brain
    python3 -m pip install -r requirements.txt
    REDIS_URL=redis://localhost:6379 REDIS_STREAM=market:updates python3 apps/redis_consumer.py
    ```
@@ -353,9 +389,9 @@ If `REDIS_URL` is set, every event is also pushed to a **Redis Stream** (`REDIS_
 
 `session` is `pre_open`, `regular`, or `post_close` (Eastern). Volatility is 30-day annualized. Positions and orders are refreshed every 30 seconds.
 
-## Local Redis
+## Redis
 
-Redis is optional: the app works without it (brain gets data via stdin). Use Redis for replay, dashboards, or a second consumer.
+On **GCP** (and in the default Docker setup), **Redis runs in the same Compose stack** as the app for low latency. The app also pipes events to the brain via stdin. Redis is used for the stream so you can replay, run a second consumer, or inspect events. When running **without Docker** (e.g. locally with `go run`), Redis is optional: the brain can receive data via stdin only; use Redis for replay, dashboards, or a second consumer.
 
 ### Option A: Docker (easiest)
 
@@ -398,32 +434,15 @@ Run the Go engine; events will be written to the stream `market:updates`. Inspec
 redis-cli XRANGE market:updates - + COUNT 5
 ```
 
-## Deploying to AWS (us-east) with Redis Cloud
+## Optional: external Redis (e.g. Redis Cloud)
 
-1. **Redis Cloud**
-   - Sign up at [redis.com/try-free](https://redis.com/try-free/) and create a subscription.
-   - Create a database; choose **region** (e.g. **AWS us-east-1** for low latency to your app).
-   - Enable **TLS** if required; note the **public endpoint** and **default user password**.
-   - Connection string format: `rediss://default:<password>@<host>:<port>` (use `rediss://` if TLS is on).
+**Recommended production setup:** Run the full stack (Go + **Redis** + Python brain) on a **GCP VM** with Redis in the same Docker Compose for **low latency**. No external Redis is required.
 
-2. **App on AWS (us-east-1)**
-   - Run the Go engine (and optional Python brain) on **EC2**, **ECS/Fargate**, or **App Runner** in **us-east-1** so it’s in the same region as Redis Cloud.
-   - Set environment variables (no `.env` file in prod):  
-     `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `REDIS_URL=<your-redis-cloud-url>`, `REDIS_STREAM=market:updates`, `ACTIVE_SYMBOLS_FILE` (and scanner env), and optionally `BRAIN_CMD` if the brain runs in the same task/instance.
-   - For **BRAIN_CMD** in ECS/Fargate: either build a single image that runs both Go and Python (e.g. a shell script that starts the brain then the engine), or run the brain as a sidecar and use a local socket/Redis instead of stdin (more involved). Easiest: one container that runs `go run .` with `BRAIN_CMD` pointing to a Python script in the image.
+If you prefer **hosted Redis** (e.g. Redis Cloud) instead of the local container:
 
-3. **REDIS_URL in production**
-   - Use the Redis Cloud **full URL** (with password), e.g.  
-     `REDIS_URL=rediss://default:YOUR_PASSWORD@redis-12345.redis.cloud.com:12345`  
-   - Store the password in **AWS Secrets Manager** or **Parameter Store** and inject it when starting the app (e.g. task definition env from Secrets Manager).
-
-4. **Networking**
-   - Redis Cloud databases have a **public endpoint** by default; restrict access by **source IP** (your app’s outbound IP or VPC NAT) in Redis Cloud if possible.
-   - Alternatively use **Redis Cloud private endpoint** (VPC peering) if you’re in a VPC; then `REDIS_URL` uses the private hostname.
-
-5. **Summary**
-   - **Local:** `REDIS_URL=redis://localhost:6379`, optionally `docker compose up -d redis`.
-   - **AWS us-east + Redis Cloud:** Run app in us-east-1, set `REDIS_URL` to your Redis Cloud URL (us-east-1), keep secrets in Secrets Manager.
+1. Create a Redis Cloud (or other) database and get the URL (e.g. `rediss://default:<password>@<host>:<port>`). Choose a region close to your app.
+2. Run only the **app** service (no local `redis` in compose): set `REDIS_URL` to that URL and provide Alpaca keys, `ACTIVE_SYMBOLS_FILE`, and `BRAIN_CMD` as needed. Store secrets in your platform’s secret store (e.g. GCP Secret Manager).
+3. **Summary** – **GCP VM (recommended):** `docker compose up -d --build` runs Redis + app on the same VM. **With external Redis:** Use a compose override or run the app container only and set `REDIS_URL` to your hosted Redis.
 
 ### One-shot mode (single REST fetch)
 

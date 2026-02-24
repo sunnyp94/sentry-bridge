@@ -56,7 +56,7 @@ func main() {
 		os.Exit(1)
 	}
 	if len(cfg.Tickers) == 0 {
-		slog.Error("missing tickers", "msg", "set ACTIVE_SYMBOLS_FILE; scanner runs at container start and 8am ET on market days")
+		slog.Error("missing tickers", "msg", "set ACTIVE_SYMBOLS_FILE; scanner runs at container start and 7:00 ET on market days")
 		os.Exit(1)
 	}
 

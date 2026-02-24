@@ -1,0 +1,30 @@
+# Deploy Sentry Bridge to GCP VM on every push to main.
+# Requires GitHub repo secrets: GCP_VM_HOST, GCP_VM_USER, GCP_SSH_PRIVATE_KEY.
+# Optional: GCP_REPO_PATH (default: ~/sentry-bridge).
+name: Deploy to GCP VM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Allow manual run from Actions tab
+
+jobs:
+  deploy:
+    name: Deploy to VM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy on GCP VM
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.GCP_VM_HOST }}
+          username: ${{ secrets.GCP_VM_USER }}
+          key: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
+          script_stop: true
+          script: |
+            set -e
+            REPO_PATH="${{ secrets.GCP_REPO_PATH }}"
+            [ -z "$REPO_PATH" ] && REPO_PATH=~/sentry-bridge
+            cd "$REPO_PATH" || { echo "Repo path missing: $REPO_PATH"; exit 1; }
+            git fetch origin main
+            git reset --hard origin/main
+            docker compose up -d --build

@@ -1,5 +1,5 @@
 // Package config loads all engine settings from environment variables (.env or shell).
-// Required: APCA_API_KEY_ID, APCA_API_SECRET_KEY, ACTIVE_SYMBOLS_FILE (scanner runs at startup and 8am ET on market days).
+// Required: APCA_API_KEY_ID, APCA_API_SECRET_KEY, ACTIVE_SYMBOLS_FILE (scanner runs at startup and 7:00 ET with discovery on market days).
 // Optional: data URLs, Redis, BRAIN_CMD, STREAM.
 package config
 
@@ -90,7 +90,7 @@ func dataURLToStreamWS(dataURL string) string {
 }
 
 // loadTickers returns symbols to stream. Only from ACTIVE_SYMBOLS_FILE (scanner output).
-// Scanner runs at container start and at 8am ET on full market days.
+// Scanner runs at container start and at 7:00 ET (discovery) on full market days.
 func loadTickers() []string {
 	filePath := os.Getenv("ACTIVE_SYMBOLS_FILE")
 	if filePath == "" {
