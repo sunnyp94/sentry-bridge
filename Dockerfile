@@ -14,6 +14,8 @@ COPY --from=build /out/sentry-bridge /app/sentry-bridge
 COPY python-brain/ /app/python-brain/
 COPY data/ /app/data/
 WORKDIR /app
+# CPU-only torch to avoid multi-GB CUDA deps (saves disk; FinBERT runs on CPU)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r /app/python-brain/requirements.txt
 # Validate Python: compile all .py (syntax) and verify brain package imports (fail build on errors)
 RUN python3 -m compileall -q /app/python-brain \
