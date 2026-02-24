@@ -99,7 +99,7 @@ The brain includes an optional **experience buffer**, **attribution engine**, **
 
 | Component | Role | Config / Script |
 |-----------|------|-----------------|
-| **Experience Buffer** | Saves a `MarketSnapshot` (indicators, regime) on every entry and exit to `data/experience_buffer.jsonl`. | `EXPERIENCE_BUFFER_ENABLED=true` (default). Disable with env `EXPERIENCE_BUFFER_ENABLED=false`. |
+| **Experience Buffer** | Saves a `MarketSnapshot` (indicators, regime) on every entry and exit to `data/experience_buffer.jsonl`. Set `EXPERIENCE_BUFFER_MAX_LINES` (e.g. 100000) to keep only the last N lines so the file doesn't overflow. Conviction learns from an in-memory rolling window (last 100 per setup), not this file; the strategy optimizer trains on whatever is in the buffer, so a large window still gives plenty of recent trades. | `EXPERIENCE_BUFFER_ENABLED=true` (default). `EXPERIENCE_BUFFER_MAX_LINES=0` (no trim). |
 | **Attribution Engine** | Runs Random Forest feature importance on the buffer; suggests filter rules when a setup has &lt;40% success under a condition (e.g. block when ATR in top 10th percentile). | `python3 python-brain/apps/strategy_optimizer.py [--buffer path] [--min-samples 20] [--write-rules]`. Requires `scikit-learn`. |
 | **Shadow Strategy** | Tracks 3 ghost models (tighter/wide/scalp stop–TP) in parallel with live. No real orders; logs when a shadow outperforms over 30 ghost trades. | `SHADOW_STRATEGY_ENABLED=true` (default). |
 | **Conviction** | Reward +1 for profit, −2 for stop loss. Per-setup conviction scales position size (winning streak → up to 1.5×; losing → down to 0.5×). | `CONVICTION_SIZING_ENABLED=true` (default). |

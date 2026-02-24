@@ -4,6 +4,13 @@ Experience Buffer: Recursive Strategy Optimizer — Data Collection.
 Saves a MarketSnapshot for every entry and exit. Snapshots capture indicator state
 (Z-Score, RSI, MACD, OFI, ATR) and market regime (trend vs range). Trades are labeled
 24h later: Success (hit target), False Positive (pattern failed), Late Entry (price moved before entry).
+
+Retention: Set EXPERIENCE_BUFFER_MAX_LINES (e.g. 100000) to keep only the last N lines so the
+file doesn't grow forever. Learning is preserved: (1) Conviction uses an in-memory rolling window
+(last 100 outcomes per setup), not this file. (2) Strategy optimizer trains on whatever is in the
+buffer; a large window (e.g. 50k–100k lines) still gives plenty of recent trades, and recent data
+is usually more relevant for non-stationary markets. To archive long-term data before trimming,
+copy the file elsewhere or run the optimizer with --buffer pointing at an archived copy.
 """
 import json
 import logging
@@ -15,6 +22,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("brain.experience_buffer")
+
+# 0 = no trim; when > 0 we keep only the last N lines (checked every TRIM_CHECK_INTERVAL writes)
+def _max_lines() -> int:
+    try:
+        return int(os.environ.get("EXPERIENCE_BUFFER_MAX_LINES", "0").strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+TRIM_CHECK_INTERVAL = 500  # check trim every N appends
+_writes_since_trim = 0
+
 
 # Default path: repo data dir or env EXPERIENCE_BUFFER_PATH
 def _buffer_path() -> Path:
@@ -157,11 +176,44 @@ def record_exit(
     log.debug("experience_buffer exit symbol=%s reason=%s pl_pct=%s", symbol, reason, unrealized_pl_pct)
 
 
+def _trim_if_needed(path: Path) -> None:
+    """If EXPERIENCE_BUFFER_MAX_LINES is set and file has more lines, keep only the last N lines. Hold _lock for full read+write so no append runs during trim."""
+    global _writes_since_trim
+    max_ln = _max_lines()
+    if max_ln <= 0:
+        return
+    with _lock:
+        if _writes_since_trim < TRIM_CHECK_INTERVAL:
+            return
+        _writes_since_trim = 0
+        if not path.exists():
+            return
+        try:
+            with open(path) as f:
+                lines = f.readlines()
+        except Exception as e:
+            log.warning("experience_buffer trim read failed: %s", e)
+            return
+        if len(lines) <= max_ln:
+            return
+        keep = lines[-max_ln:]
+        try:
+            with open(path, "w") as f:
+                f.writelines(keep)
+            log.info("experience_buffer trimmed to last %d lines (was %d)", max_ln, len(lines))
+        except Exception as e:
+            log.warning("experience_buffer trim write failed: %s", e)
+
+
 def _append_snapshot(path: Path, row: Dict[str, Any]) -> None:
+    global _writes_since_trim
     try:
         _ensure_dir(path)
-        with open(path, "a") as f:
-            f.write(json.dumps(row) + "\n")
+        with _lock:
+            with open(path, "a") as f:
+                f.write(json.dumps(row) + "\n")
+            _writes_since_trim += 1
+        _trim_if_needed(path)
     except Exception as e:
         log.warning("experience_buffer write failed: %s", e)
 
