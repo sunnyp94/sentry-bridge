@@ -94,7 +94,7 @@ def position_size_shares(
             kelly_scale=True,
             max_qty=max_qty,
         )
-    pct = getattr(config, "POSITION_SIZE_PCT", 0.01)
+    pct = getattr(config, "POSITION_SIZE_PCT", 0.05)
     if pct <= 0 or price <= 0:
         return 1
     raw = (equity * pct) / price
