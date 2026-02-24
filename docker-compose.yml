@@ -10,6 +10,8 @@ services:
     restart: unless-stopped
 
   app:
+    # When DOCKER_IMAGE is set (e.g. on GCP VM deploy), pull from registry; else build locally
+    image: ${DOCKER_IMAGE:-sentry-bridge-app}
     build:
       context: .
       dockerfile: Dockerfile

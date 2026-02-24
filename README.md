@@ -136,31 +136,28 @@ To stop: `docker compose down`. To update: `git pull && docker compose up -d --b
 
 #### Deploy on every merge to main
 
-A GitHub Actions workflow (`.github/workflows/deploy-gcp.yml`) deploys to this VM on every push to `main`. One-time setup:
+The workflow **builds the app image in GitHub Actions**, pushes it to **GitHub Container Registry (ghcr.io)**, then SSHs to the VM and runs **pull + up** (no build on the VM, so the VM needs less disk and never runs out of space during deploy). One-time setup:
 
 1. **VM and app**  
-   Complete the GCP VM steps above (create VM, install Docker, clone repo, configure `.env`, run `docker compose up -d --build` once). Note the VM’s external IP or hostname.
+   Complete the GCP VM steps above (create VM, install Docker, clone repo, configure `.env`). You can run `docker compose up -d --build` once locally on the VM to verify, or wait for the first automated deploy. Note the VM’s external IP.
 
 2. **SSH key for GitHub Actions**  
-   On your machine, create a key pair used only for deploys (e.g. no passphrase for CI):
+   On your machine, create a key pair used only for deploys (no passphrase):
    ```bash
    ssh-keygen -t ed25519 -C "github-actions-deploy" -f deploy_key -N ""
    ```
-   Add the **public** key to the VM (as the user that runs Docker):
-   ```bash
-   # On the VM (or from your machine: ssh user@VM_IP "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys")
-   echo "contents of deploy_key.pub" >> ~/.ssh/authorized_keys
-   ```
+   Add the **public** key (`deploy_key.pub`) to the VM’s `~/.ssh/authorized_keys` (as the user that runs Docker).
 
 3. **GitHub repository secrets**  
    In the repo: **Settings → Secrets and variables → Actions**. Add:
-   - `GCP_VM_HOST` – VM’s external IP or hostname (e.g. `34.123.45.67`).
-   - `GCP_VM_USER` – SSH user (e.g. `ubuntu` for Ubuntu images).
-   - `GCP_SSH_PRIVATE_KEY` – Full contents of `deploy_key` (the private key).
+   - `GCP_VM_HOST` – VM’s external IP (e.g. `34.123.45.67`).
+   - `GCP_VM_USER` – SSH user (e.g. `ubuntu` or `sunnyakpatel`).
+   - `GCP_SSH_PRIVATE_KEY` – Full contents of the **private** key file (`deploy_key`).
+   - `GHCR_PAT` – A **Personal Access Token** with `read:packages` so the VM can pull the image from ghcr.io. Create under GitHub **Settings → Developer settings → Personal access tokens**; give it `read:packages` and no other scopes. Use a fine-grained token with read access to the repo’s packages, or a classic token with `read:packages`.
    - `GCP_REPO_PATH` (optional) – Path to the repo on the VM; default is `~/sentry-bridge`.
 
 4. **Result**  
-   Every push (or merge) to `main` runs the workflow: it SSHs into the VM, updates the repo to `origin/main`, and runs `docker compose up -d --build`. You can also trigger the same workflow manually from the **Actions** tab (**Deploy to GCP VM** → **Run workflow**).
+   Every push (or merge) to `main`: (1) workflow builds the Docker image and pushes to `ghcr.io/<owner>/<repo>/sentry-bridge-app:latest`, (2) SSHs to the VM, updates the repo to `origin/main`, logs in to ghcr.io with `GHCR_PAT`, runs `docker compose pull` and `docker compose up -d`. You can also run the workflow manually from **Actions** → **Deploy to GCP VM** → **Run workflow**.
 
 ---
 
