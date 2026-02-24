@@ -86,13 +86,22 @@ This creates `deploy_key` (private) and `deploy_key.pub` (public).
 
 ### 2.2 Add public key to the VM
 
-**Option A – From your machine (if you can SSH to the VM):**
+Use the **same user** that runs Docker (e.g. `sunnyakpatel` or `sunnypatel`). Choose one:
+
+**Option A – GCP Console (recommended; key persists across reboots):**
+
+1. GCP Console → **Compute Engine** → **VM instances** → click your VM → **Edit** (pencil).
+2. Scroll to **SSH Keys** → **+ Add item**.
+3. Paste the **entire line** from `cat ~/deploy_key.pub` (e.g. `ssh-ed25519 AAAA... github-actions-deploy`).
+4. Save. The key is stored in instance metadata; the VM will keep it in `~/.ssh/authorized_keys` even after reboots.
+
+**Option B – From your machine (if you can already SSH to the VM):**
 
 ```bash
 ssh-copy-id -i ~/deploy_key.pub YOUR_VM_USER@EXTERNAL_IP
 ```
 
-**Option B – Manual:** On your machine run `cat ~/deploy_key.pub` and copy the line. On the VM:
+**Option C – Manual (on the VM):** On your machine run `cat ~/deploy_key.pub` and copy the line. SSH into the VM, then:
 
 ```bash
 mkdir -p ~/.ssh
@@ -101,7 +110,7 @@ echo "PASTE_THE_LINE_FROM_deploy_key.pub" >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 ```
 
-Use the **same user** that runs Docker (e.g. `sunnyakpatel`).
+Note: If you use Option C, GCP’s metadata agent may overwrite `authorized_keys` on reboot; use Option A so the key is in metadata and persists.
 
 ### 2.3 Add GitHub repository secrets
 

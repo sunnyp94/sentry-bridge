@@ -1,5 +1,5 @@
 """
-Daily cap rule: when daily PnL >= DAILY_CAP_PCT (default 0.2%), block new buys for the rest of the day.
+Daily cap rule: when daily PnL >= DAILY_CAP_PCT (default 0.25%), block new buys for the rest of the day.
 Sells (e.g. stop loss) still allowed. Consumer calls update_equity() on each positions update; strategy checks is_daily_cap_reached().
 """
 import logging

@@ -19,8 +19,8 @@ Sentry Bridge is an **automated trading system** that streams market data from *
 ### Strategy brain (Python)
 
 - **Composite score** – News sentiment (FinBERT/VADER), momentum (1m/5m returns), optional technicals (RSI, MACD, patterns). Consensus: require N-of-3 sources positive before buy.
-- **Rules** – Daily cap (stop new buys when daily PnL ≥ 0.2%), drawdown guard, kill switch (bad news or sharp drop), stop loss, session (regular-hours-only by default; post-close holds).
-- **Paper trading** – Market day orders on Alpaca paper account; positions/orders refreshed every 15s. Scale-out (sell 25% at 1%/2%/3%) and conviction-based sizing from recent outcomes.
+- **Rules** – Daily cap (stop new buys when daily PnL ≥ 0.25%), drawdown guard, kill switch (bad news or sharp drop), stop loss, session (regular-hours-only by default; post-close holds).
+- **Paper trading** – Market day orders on Alpaca paper account; positions/orders refreshed every 15s (configurable via `POSITIONS_INTERVAL_SEC`). Scale-out (sell 25% at 1%/2%/3%) and conviction-based sizing from recent outcomes. Position size: 5% of equity per trade (configurable via `POSITION_SIZE_PCT`).
 
 ### Learning and optimization
 
@@ -292,7 +292,7 @@ The brain decides when to buy or sell using:
 
 - **Sentiment:** [FinBERT](https://huggingface.co/ProsusAI/finbert) (finance-trained transformer) on news headline + summary; falls back to VADER if unavailable. Install deps with `python3 -m pip install -r python-brain/requirements.txt`.
 - **Probability of gain:** Heuristic from `return_1m`, `return_5m`, and `annualized_vol_30d` (from the stream).
-- **Rules:** Buy when sentiment and prob_gain are above thresholds and you have no position; sell when sentiment is bearish or prob_gain drops and you have a position. Trades only during **regular session** unless you set `STRATEGY_REGULAR_SESSION_ONLY=false`. One order per symbol per 60s (cooldown).
+- **Rules:** Buy when sentiment and prob_gain are above thresholds and you have no position; sell when sentiment is bearish or prob_gain drops and you have a position. Trades only during **regular session** unless you set `STRATEGY_REGULAR_SESSION_ONLY=false`. One order per symbol per 30s (cooldown; `ORDER_COOLDOWN_SEC`).
 
 **Enable paper trading:**
 
@@ -312,31 +312,31 @@ The brain decides when to buy or sell using:
    SCREENER_UNIVERSE=lab_12
    ```
 
-3. **Optional tuning** (defaults shown):
+3. **Optional tuning** (defaults from `brain/config.py`; override in `.env` as needed):
    ```bash
-   SENTIMENT_BUY_THRESHOLD=0.18    # buy when sentiment >= this
-   SENTIMENT_SELL_THRESHOLD=-0.18 # sell when sentiment <= this (and you have position)
-   PROB_GAIN_THRESHOLD=0.54       # buy only when prob_gain >= this
-   STRATEGY_MAX_QTY=2             # max shares per order
+   SENTIMENT_BUY_THRESHOLD=0.10    # reserved for plug-in; Green Light uses PROB_GAIN_THRESHOLD
+   SENTIMENT_SELL_THRESHOLD=-0.32  # reserved for plug-in
+   PROB_GAIN_THRESHOLD=0.12        # buy when prob_gain >= this (scalp default)
+   STRATEGY_MAX_QTY=12            # max shares per order (default)
    STRATEGY_REGULAR_SESSION_ONLY=true
    # Composite: require 2 of 3 sources (news, social, momentum) positive to buy; avoid single sensational headline
    USE_CONSENSUS=true
    CONSENSUS_MIN_SOURCES_POSITIVE=2
    CONSENSUS_POSITIVE_THRESHOLD=0.15
-   # 0.2% daily shutdown: no new buys when daily PnL >= 0.2% (lock in gains)
+   # 0.25% daily shutdown: no new buys when daily PnL >= 0.25% (lock in gains)
    DAILY_CAP_ENABLED=true
-   DAILY_CAP_PCT=0.2
+   DAILY_CAP_PCT=0.25
    # Kill switch: blocks all new buys when triggered (sticky until restart)
    KILL_SWITCH=false              # set true to disable buys manually
    KILL_SWITCH_SENTIMENT_THRESHOLD=-0.50   # bad news: trigger if headline+summary sentiment <= this
    KILL_SWITCH_RETURN_THRESHOLD=-0.05      # market tanks: trigger if return_1m or return_5m <= -5%
-   # 5% stop loss on positions (sell when unrealized P&amp;L <= -5%)
-   STOP_LOSS_PCT=5.0
+   # 1% stop loss on positions (sell when unrealized P&amp;L <= -1%)
+   STOP_LOSS_PCT=1.0
    ```
 
    **Kill switch:** When triggered (bad news, sharp negative return, or `KILL_SWITCH=true`), **no new buy** signals are issued; sells (including stop loss) still execute. Triggered automatically when news sentiment ≤ `KILL_SWITCH_SENTIMENT_THRESHOLD` or when 1m/5m return ≤ `KILL_SWITCH_RETURN_THRESHOLD`.
 
-   **Stop loss:** Every positions update (every 30s from Alpaca), any position with unrealized PnL ≤ `-STOP_LOSS_PCT`% is sold (market order). Default 5%.
+   **Stop loss:** Every positions update (every 15s by default from Alpaca), any position with unrealized PnL ≤ `-STOP_LOSS_PCT`% is sold (market order). Default 1%.
 
 4. **Run** (from project root):
    ```bash
@@ -347,7 +347,7 @@ You should see strategy logs with `sources=... consensus_ok=... -> action=...` a
 
 **Composite score (3 sources):** By default the bot uses **News** (FinBERT) + **Social** (placeholder) + **Momentum** (returns). It only buys when at least **2 of 3** sources are "positive" (`CONSENSUS_MIN_SOURCES_POSITIVE=2`), so a single sensational headline doesn’t drive trades. If News is positive but Social is "meh," the bot stays cash. Set `USE_CONSENSUS=false` to use a single news score as before.
 
-**0.2% daily shutdown:** When daily PnL ≥ `DAILY_CAP_PCT` (default **0.2%**), the bot stops **new buys** for the day (sells still allowed). Set `DAILY_CAP_ENABLED=false` to disable.
+**0.25% daily shutdown:** When daily PnL ≥ `DAILY_CAP_PCT` (default **0.25%**), the bot stops **new buys** for the day (sells still allowed). Set `DAILY_CAP_ENABLED=false` to disable.
 
 ### Python brain: modular design
 
@@ -357,7 +357,7 @@ The Python brain is split so you can add or change business rules without rewrit
 |-------|------|
 | **config.py** | All thresholds and flags from env (e.g. `CONSENSUS_MIN_SOURCES_POSITIVE`, `DAILY_CAP_PCT`). |
 | **signals/** | **news_sentiment** = FinBERT/VADER on news. **composite** = News + Social (placeholder) + Momentum and consensus. |
-| **rules/** | **consensus** = allow buy only when enough sources positive. **daily_cap** = block new buys when daily PnL ≥ 0.2%. |
+| **rules/** | **consensus** = allow buy only when enough sources positive. **daily_cap** = block new buys when daily PnL ≥ 0.25%. |
 | **strategy.py** | Orchestrates: applies rules (kill switch, daily cap, session, consensus, stop loss) and returns buy/sell/hold. |
 | **apps/consumer.py** | Stdin entry: reads events, updates state, calls composite + strategy + executor. |
 | **apps/redis_consumer.py** | Redis entry: reads stream `market:updates` (test pipeline or second consumer). |
@@ -381,7 +381,7 @@ If `REDIS_URL` is set, every event is also pushed to a **Redis Stream** (`REDIS_
 | `positions` | positions[] (symbol, qty, side, market_value, cost_basis, unrealized_pl, current_price) |
 | `orders`   | orders[] (id, symbol, side, qty, filled_qty, type, status, created_at) |
 
-`session` is `pre_open`, `regular`, or `post_close` (Eastern). Volatility is 30-day annualized. Positions and orders are refreshed every 30 seconds.
+`session` is `pre_open`, `regular`, or `post_close` (Eastern). Volatility is 30-day annualized. Positions and orders are refreshed every 15 seconds by default (`POSITIONS_INTERVAL_SEC`).
 
 ## Redis
 

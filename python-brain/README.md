@@ -27,7 +27,7 @@ python-brain/
     │   └── microstructure.py # VWAP, ATR, Z-Score (pro-style); OFI stub for tape data.
     └── rules/          # Business rules
         ├── consensus.py   # Require N sources positive to allow buy.
-        └── daily_cap.py   # 0.2% daily shutdown (no new buys when daily PnL ≥ 0.2%).
+        └── daily_cap.py   # 0.25% daily shutdown (no new buys when daily PnL ≥ 0.25%).
 ```
 
 ## Running
