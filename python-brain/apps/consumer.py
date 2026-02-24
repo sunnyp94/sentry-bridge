@@ -265,7 +265,10 @@ def _try_place_order(
     from brain.executor import place_order, get_account_equity
     price = price_override if price_override is not None and price_override > 0 else _get_price(d.symbol)
     # Position sizing: always 5% of actual account equity from Alpaca (no fallback; skip buy if equity unavailable)
-    if d.action == "buy" and price and price > 0:
+    if d.action == "buy":
+        if not price or price <= 0:
+            log.error("position_size: no price for %s; skipping buy", d.symbol)
+            return False
         equity = _last_equity
         if equity is None or equity <= 0:
             equity = get_account_equity()
@@ -277,7 +280,7 @@ def _try_place_order(
         pct = getattr(brain_config, "POSITION_SIZE_PCT", 0.05)
         qty = int((equity * pct) / price) if pct > 0 else 1
         qty = max(1, min(qty, brain_config.STRATEGY_MAX_QTY))
-        if d.action == "buy" and getattr(brain_config, "SPY_200MA_REGIME_ENABLED", False) and _get_spy_below_200ma() is True:
+        if getattr(brain_config, "SPY_200MA_REGIME_ENABLED", False) and _get_spy_below_200ma() is True:
             mult = getattr(brain_config, "SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER", 0.5)
             qty = max(1, int(qty * mult))
         try:
@@ -288,6 +291,12 @@ def _try_place_order(
             pass
         d = Decision(d.action, d.symbol, qty, d.reason)
         log.info("position_size equity=%.2f price=%.2f pct=%.0f%% -> qty=%d", equity, price, pct * 100, qty)
+        # Never place a buy with qty=1 when 5% of equity would imply more (catches old code or bugs)
+        if qty == 1 and equity > 0 and price > 0 and (equity * pct) / price >= 1.5:
+            log.error("position_size: computed qty=1 but 5%% of equity would be %.1f shares; skipping buy for %s", (equity * pct) / price, d.symbol)
+            return False
+    price_str = f"{price:.2f}" if price is not None and price > 0 else "market"
+    log.info("order %s %s qty=%d price=%s reason=%s", d.action.upper(), d.symbol, d.qty, price_str, d.reason or "")
     if place_order(d, current_price=price):
         last_order_time_by_symbol[d.symbol] = now
         # Experience buffer: record entry/exit snapshot for strategy optimizer

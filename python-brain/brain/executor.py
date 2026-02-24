@@ -62,6 +62,7 @@ def get_account_equity() -> Optional[float]:
                     try:
                         f = float(val)
                         if f > 0:
+                            log.info("get_account_equity equity=%.2f", f)
                             return f
                     except (TypeError, ValueError):
                         pass
@@ -92,6 +93,8 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
     if client is None:
         log.error("APCA_API_KEY_ID / APCA_API_SECRET_KEY not set")
         return False
+    price_str = f"{current_price:.2f}" if current_price is not None and current_price > 0 else "market"
+    log.info("place_order %s %s qty=%d price=%s", decision.action.upper(), decision.symbol, decision.qty, price_str)
     side = OrderSide.BUY if decision.action == "buy" else OrderSide.SELL
     use_limit = config.USE_LIMIT_ORDERS and current_price is not None and current_price > 0 and LimitOrderRequest is not None
     try:

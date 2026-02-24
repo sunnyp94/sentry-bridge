@@ -85,24 +85,6 @@ def _parse_et_time(s: str) -> Optional[tuple]:
         return None
 
 
-def is_after_no_new_buys() -> bool:
-    """True if at or after NO_NEW_BUYS_AFTER_ET (e.g. 15:45) on a weekday — no new buys, only closes."""
-    if os.environ.get("BACKTEST_SESSION_SKIP") == "1":
-        return False
-    if not config.NO_NEW_BUYS_AFTER_ET or ZoneInfo is None:
-        return False
-    end = _parse_et_time(config.NO_NEW_BUYS_AFTER_ET)
-    if end is None:
-        return False
-    try:
-        et = datetime.now(ZoneInfo("America/New_York"))
-        if et.weekday() > 4:
-            return False
-        return (et.hour > end[0]) or (et.hour == end[0] and et.minute >= end[1])
-    except Exception:
-        return False
-
-
 def probability_gain(payload: dict) -> float:
     """Heuristic probability of gain [0, 1] from return_1m, return_5m, volatility."""
     ret1 = payload.get("return_1m")
@@ -252,10 +234,6 @@ def decide(
     # Buy: max drawdown halt
     if drawdown_halt:
         return Decision("hold", symbol, 0, "drawdown_halt")
-
-    # Buy: after no-new-buys time (e.g. after 3:45pm ET; only closes allowed)
-    if not have_position and is_after_no_new_buys():
-        return Decision("hold", symbol, 0, "after_no_new_buys")
 
     # Buy: Green Light — 4-point checklist. Liberal: when data missing, allow (don't block).
     if not have_position:
