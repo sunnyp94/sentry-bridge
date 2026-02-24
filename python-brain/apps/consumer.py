@@ -264,7 +264,7 @@ def _try_place_order(
         return False
     from brain.executor import place_order, get_account_equity
     price = price_override if price_override is not None and price_override > 0 else _get_price(d.symbol)
-    # Pillar 1: position sizing — 5% of equity per trade (same paper and live)
+    # Position sizing: always 5% of actual account equity from Alpaca (no fallback; skip buy if equity unavailable)
     if d.action == "buy" and price and price > 0:
         equity = _last_equity
         if equity is None or equity <= 0:
@@ -272,34 +272,22 @@ def _try_place_order(
             if equity is not None:
                 _last_equity = equity
         if equity is None or equity <= 0:
-            try:
-                eq_env = os.environ.get("EQUITY_OVERRIDE", "").strip()
-                if eq_env:
-                    equity = float(eq_env)
-                    if equity > 0:
-                        _last_equity = equity
-                        log.info("position_size using EQUITY_OVERRIDE=%.2f", equity)
-            except (TypeError, ValueError):
-                pass
-        if equity and equity > 0:
-            # Always use POSITION_SIZE_PCT (default 5%) of equity per trade
-            pct = getattr(brain_config, "POSITION_SIZE_PCT", 0.05)
-            qty = int((equity * pct) / price) if pct > 0 else 1
-            qty = max(1, min(qty, brain_config.STRATEGY_MAX_QTY))
-            if d.action == "buy" and getattr(brain_config, "SPY_200MA_REGIME_ENABLED", False) and _get_spy_below_200ma() is True:
-                mult = getattr(brain_config, "SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER", 0.5)
-                qty = max(1, int(qty * mult))
-            # Conviction: scale size by setup performance (+1 profit / -2 stop -> winning streak = larger size)
-            try:
-                from brain.conviction import conviction_multiplier
-                conv = conviction_multiplier(d.reason or "green_light_4pt")
-                qty = max(1, min(brain_config.STRATEGY_MAX_QTY, int(qty * conv)))
-            except Exception:
-                pass
-            d = Decision(d.action, d.symbol, qty, d.reason)
-            log.info("position_size equity=%.2f price=%.2f pct=%.0f%% -> qty=%d", equity, price, pct * 100, qty)
-        else:
-            log.warning("position_size skipped (no equity); placing 1 share. Set EQUITY_OVERRIDE=100000 if account API unavailable.")
+            log.error("position_size: cannot get account equity from Alpaca; skipping buy for %s (check get_account_equity logs)", d.symbol)
+            return False
+        pct = getattr(brain_config, "POSITION_SIZE_PCT", 0.05)
+        qty = int((equity * pct) / price) if pct > 0 else 1
+        qty = max(1, min(qty, brain_config.STRATEGY_MAX_QTY))
+        if d.action == "buy" and getattr(brain_config, "SPY_200MA_REGIME_ENABLED", False) and _get_spy_below_200ma() is True:
+            mult = getattr(brain_config, "SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER", 0.5)
+            qty = max(1, int(qty * mult))
+        try:
+            from brain.conviction import conviction_multiplier
+            conv = conviction_multiplier(d.reason or "green_light_4pt")
+            qty = max(1, min(brain_config.STRATEGY_MAX_QTY, int(qty * conv)))
+        except Exception:
+            pass
+        d = Decision(d.action, d.symbol, qty, d.reason)
+        log.info("position_size equity=%.2f price=%.2f pct=%.0f%% -> qty=%d", equity, price, pct * 100, qty)
     if place_order(d, current_price=price):
         last_order_time_by_symbol[d.symbol] = now
         # Experience buffer: record entry/exit snapshot for strategy optimizer

@@ -35,27 +35,45 @@ def _client():
 
 
 def get_account_equity() -> Optional[float]:
-    """Return current account equity from Alpaca. Used by rules.daily_cap to compute daily PnL and 0.2% shutdown. None if unavailable."""
+    """Return current account equity from Alpaca. Used for daily cap and position sizing. None only if API/client unavailable after retries."""
     if TradingClient is None:
+        log.warning("get_account_equity: alpaca-py not installed")
         return None
     client = _client()
     if client is None:
+        log.warning("get_account_equity: APCA_API_KEY_ID or APCA_API_SECRET_KEY not set")
         return None
-    try:
-        t0 = time.perf_counter()
-        acc = client.get_account()
-        log.info("latency step=get_account_equity ms=%.1f", (time.perf_counter() - t0) * 1000)
-        if acc is None:
-            return None
-        eq = getattr(acc, "equity", None)
-        if eq is None:
-            return None
+    last_error = None
+    for attempt in range(3):
         try:
-            return float(eq)
-        except (TypeError, ValueError):
-            return None
-    except Exception:
-        return None
+            t0 = time.perf_counter()
+            acc = client.get_account()
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            log.info("latency step=get_account_equity ms=%.1f", elapsed_ms)
+            if acc is None:
+                last_error = "client.get_account() returned None"
+                log.warning("get_account_equity (attempt %d/3): %s", attempt + 1, last_error)
+                if attempt < 2:
+                    time.sleep(1.0)
+                continue
+            for attr in ("equity", "portfolio_value", "last_equity"):
+                val = getattr(acc, attr, None)
+                if val is not None:
+                    try:
+                        f = float(val)
+                        if f > 0:
+                            return f
+                    except (TypeError, ValueError):
+                        pass
+            last_error = "account has no usable equity/portfolio_value/last_equity"
+            log.warning("get_account_equity (attempt %d/3): %s (acc=%s)", attempt + 1, last_error, type(acc).__name__)
+        except Exception as e:
+            last_error = str(e)
+            log.warning("get_account_equity (attempt %d/3): %s", attempt + 1, e, exc_info=True)
+        if attempt < 2:
+            time.sleep(1.0)
+    log.error("get_account_equity: failed after 3 attempts. Last error: %s", last_error)
+    return None
 
 
 def place_order(decision: Decision, current_price: Optional[float] = None) -> bool:
