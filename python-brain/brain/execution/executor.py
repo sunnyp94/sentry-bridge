@@ -181,18 +181,17 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
         return False
 
 
-def close_all_positions(positions: List[Dict[str, Any]], reason: str = "flat_on_startup") -> int:
+def close_all_positions_from_api() -> int:
     """
-    Cancel all open orders, then place market sell for each position.
-    Used for flat-on-startup (safe restart). You cannot sell a position while it has an open order.
-    positions: list of dicts with symbol, qty, optional side, optional current_price. May be empty (cancel-only).
-    Returns number of sell orders submitted.
+    Fetch positions from Alpaca, cancel all open orders, then close every position.
+    Used for flat-on-startup (safe restart). Does not rely on event payload.
+    Returns number of positions closed.
     """
     client = _client()
-    if client is None or MarketOrderRequest is None or OrderSide is None or TimeInForce is None:
-        log.warning("close_all_positions: no client or alpaca; skip")
+    if client is None:
+        log.warning("close_all_positions_from_api: no client; skip")
         return 0
-    # Cancel all open orders first so position sells are not blocked (and to clear pending orders on restart)
+    # Cancel all open orders first so position closes are not blocked
     try:
         result = client.cancel_orders()
         if isinstance(result, list) and result:
@@ -201,6 +200,52 @@ def close_all_positions(positions: List[Dict[str, Any]], reason: str = "flat_on_
             log.info("flat_on_startup: cancelled open orders")
     except Exception as e:
         log.warning("flat_on_startup: cancel_orders failed (will still try to close positions): %s", e)
+    # Fetch current positions from API (don't rely on event payload)
+    try:
+        positions = client.get_all_positions()
+    except Exception as e:
+        log.warning("flat_on_startup: get_all_positions failed: %s", e)
+        return 0
+    if not positions or (isinstance(positions, dict) and not positions.get("positions")):
+        return 0
+    # Alpaca can return list or dict with 'positions' key
+    if isinstance(positions, dict):
+        positions = positions.get("positions") or []
+    closed = 0
+    for pos in positions:
+        sym = getattr(pos, "symbol", None) or (pos.get("symbol") if isinstance(pos, dict) else None)
+        if not sym:
+            continue
+        sym = str(sym).strip()
+        try:
+            client.close_position(sym)
+            closed += 1
+            qty = getattr(pos, "qty", None) or (pos.get("qty") if isinstance(pos, dict) else "?")
+            log.info("flat_on_startup closed %s qty=%s", sym, qty)
+        except Exception as e:
+            log.warning("flat_on_startup close %s failed: %s", sym, e)
+    if closed:
+        log.info("flat_on_startup: closed %d position(s) from API", closed)
+    return closed
+
+
+def close_all_positions(positions: List[Dict[str, Any]], reason: str = "flat_on_startup") -> int:
+    """
+    Cancel all open orders, then place market sell for each position (from payload).
+    Prefer close_all_positions_from_api() for flat-on-startup so we don't rely on event data.
+    """
+    client = _client()
+    if client is None or MarketOrderRequest is None or OrderSide is None or TimeInForce is None:
+        log.warning("close_all_positions: no client or alpaca; skip")
+        return 0
+    try:
+        result = client.cancel_orders()
+        if isinstance(result, list) and result:
+            log.info("flat_on_startup: cancelled %d open order(s)", len(result))
+        elif result:
+            log.info("flat_on_startup: cancelled open orders")
+    except Exception as e:
+        log.warning("flat_on_startup: cancel_orders failed: %s", e)
     if not positions:
         return 0
     placed = 0
