@@ -6,7 +6,7 @@ Otherwise market orders. Also exposes get_account_equity() for rules.
 import logging
 import os
 import time
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from brain.core import config
 from brain.strategy import Decision
@@ -179,3 +179,48 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
     except Exception as e:
         log.exception("order failed: %s", e)
         return False
+
+
+def close_all_positions(positions: List[Dict[str, Any]], reason: str = "flat_on_startup") -> int:
+    """
+    Place market sell for each position. Used for flat-on-startup (safe restart).
+    positions: list of dicts with symbol, qty, optional side, optional current_price.
+    Returns number of orders submitted.
+    """
+    if not positions:
+        return 0
+    client = _client()
+    if client is None or MarketOrderRequest is None or OrderSide is None or TimeInForce is None:
+        log.warning("close_all_positions: no client or alpaca; skip")
+        return 0
+    placed = 0
+    for p in positions:
+        sym = (p.get("symbol") or "").strip()
+        if not sym:
+            continue
+        qty = p.get("qty", 0)
+        try:
+            qty = int(qty)
+        except (TypeError, ValueError):
+            continue
+        side = (p.get("side") or "long").lower()
+        if side == "short":
+            qty = -qty
+        sell_qty = abs(qty)
+        if sell_qty <= 0:
+            continue
+        try:
+            req = MarketOrderRequest(
+                symbol=sym,
+                qty=sell_qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+            )
+            client.submit_order(req)
+            placed += 1
+            log.info("flat_on_startup sell %s qty=%d", sym, sell_qty)
+        except Exception as e:
+            log.warning("flat_on_startup sell %s qty=%d failed: %s", sym, sell_qty, e)
+    if placed:
+        log.info("flat_on_startup: placed %d sell order(s)", placed)
+    return placed

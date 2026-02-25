@@ -47,6 +47,8 @@ DAILY_LOSS_CAP_PCT = _float("DAILY_LOSS_CAP_PCT", "1.0")  # -1% daily loss = no 
 DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT = _float("DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT", "5.0")  # 5% = pro standard
 # When True, also close all positions when daily target hit. Default false = let winners run (only stop new buys).
 FLAT_WHEN_DAILY_TARGET_HIT = _bool("FLAT_WHEN_DAILY_TARGET_HIT", "false")
+# When True, on first positions event after startup close all positions (safe restart; no .env change required, set via env).
+FLAT_POSITIONS_ON_STARTUP = _bool("FLAT_POSITIONS_ON_STARTUP", "false")
 
 # -----------------------------------------------------------------------------
 # Buy thresholds — Green Light uses PROB_GAIN_THRESHOLD only; others reserved for plug-in rules
