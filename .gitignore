@@ -1,5 +1,6 @@
 .env
 *.log
+vm-logs/
 bin/
 __pycache__/
 .DS_Store
