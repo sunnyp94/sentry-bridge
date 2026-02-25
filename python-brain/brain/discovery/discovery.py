@@ -19,10 +19,10 @@ try:
 except ImportError:
     ZoneInfo = None
 
-from . import config as brain_config
-from .data import get_bars, get_bars_chunked
-from .screener import get_universe, score_universe
-from .market_calendar import is_full_trading_day
+from brain.core import config as brain_config
+from brain.market.data import get_bars, get_bars_chunked
+from brain.screener import get_universe, score_universe
+from brain.market.market_calendar import is_full_trading_day
 
 log = logging.getLogger("brain.discovery")
 

@@ -16,7 +16,7 @@ except ImportError:
     ZoneInfo = None
 
 import os
-from . import config
+from brain.core import config
 
 log = logging.getLogger("brain.strategy")
 
@@ -41,7 +41,7 @@ def get_sentiment_ema(symbol: str) -> float:
 
 def sentiment_score_from_news(payload: dict) -> float:
     """Legacy / kill-switch: raw news score from headline+summary. Lazy-import to avoid loading FinBERT in backtest."""
-    from .signals.news_sentiment import score_news
+    from brain.signals.news_sentiment import score_news
     return score_news(payload)
 
 
@@ -256,7 +256,7 @@ def decide(
         # 3) Momentum: scalp = skip (always allow); otherwise RSI divergence or MACD above zero when enough bars
         momentum_ok = True  # scalp: don't block on momentum
         if not getattr(config, "SCALP_SKIP_MOMENTUM", True) and ltf_prices and len(ltf_prices) >= 20:
-            from .signals.technical import rsi_bullish_divergence, macd_histogram_above_zero
+            from brain.signals.technical import rsi_bullish_divergence, macd_histogram_above_zero
             momentum_ok = rsi_bullish_divergence(ltf_prices, period=getattr(config, "RSI_PERIOD", 14)) or macd_histogram_above_zero(ltf_prices)
         if not momentum_ok:
             return Decision("hold", symbol, 0, "green_light_momentum")
@@ -270,7 +270,7 @@ def decide(
         rsi_ob_ofi_min = getattr(config, "RSI_OVERBOUGHT_OFI_MIN", 0.20)
         rsi_overbought_ok = True
         if ltf_prices and len(ltf_prices) >= getattr(config, "RSI_PERIOD", 14) + 1:
-            from .signals.technical import rsi_value
+            from brain.signals.technical import rsi_value
             rsi_val = rsi_value(ltf_prices, getattr(config, "RSI_PERIOD", 14))
             if rsi_val is not None and rsi_val > rsi_ob:
                 rsi_overbought_ok = ofi is not None and ofi >= rsi_ob_ofi_min

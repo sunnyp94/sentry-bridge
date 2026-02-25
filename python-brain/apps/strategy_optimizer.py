@@ -2,17 +2,23 @@
 """
 Attribution Engine: Recursive Strategy Optimizer.
 
-Uses Random Forest (or XGBoost if installed) to perform feature importance analysis
-on the Experience Buffer. Identifies which indicator states best predict failed trades.
-Self-correction: generates filter rules when a setup has <40% success rate under certain
-conditions (e.g. block when ATR in top 10th percentile).
+Uses Random Forest for feature importance on the Experience Buffer. Generates filter rules
+when a setup has <40% success under a condition (e.g. block when ATR in top 10th percentile).
+
+Anti-meta-overfitting:
+- Rolling window: only use last N days of buffer (default 7) so rules require pattern over
+  multiple days, not curve-fitting to one day.
+- Proposed vs active: new rules write to proposed file with timestamp; promoted to active
+  only after 24h (out-of-sample validation on paper before touching live).
 """
 import argparse
 import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Optional
 
 # Ensure brain package is on path when run from repo root or python-brain
 _root = Path(__file__).resolve().parent.parent
@@ -30,13 +36,43 @@ try:
 except ImportError:
     _HAS_SKLEARN = False
 
-from brain.experience_buffer import load_buffer
+from brain.learning.experience_buffer import load_buffer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 log = logging.getLogger("strategy_optimizer")
 
-# Path for generated filter rules (strategy can read to block bad setups)
+# Path for active rules (strategy/consumer read these to block bad setups)
 GENERATED_RULES_PATH = Path(os.environ.get("GENERATED_RULES_PATH", "") or str(_root.parent / "data" / "generated_filter_rules.json"))
+# Proposed rules (written by optimizer; promoted to active after 24h out-of-sample)
+GENERATED_RULES_PROPOSED_PATH = _root.parent / "data" / "generated_filter_rules_proposed.json"
+
+ROLLING_DAYS_DEFAULT = 7
+PROMOTE_AFTER_HOURS = 24
+
+
+def _parse_ts(ts_str: str) -> Optional[datetime]:
+    """Parse ISO ts to datetime (naive UTC)."""
+    if not ts_str:
+        return None
+    try:
+        # Handle Z suffix and optional microseconds
+        s = str(ts_str).strip().replace("Z", "+00:00")
+        return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _filter_records_last_n_days(records: list, days: int) -> list:
+    """Keep only records with ts in the last N days (rolling window to avoid curve-fitting to one day)."""
+    if days <= 0:
+        return records
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    out = []
+    for r in records:
+        ts = _parse_ts(r.get("ts") or r.get("entry_ts") or "")
+        if ts is not None and ts >= cutoff:
+            out.append(r)
+    return out
 
 
 def _ensure_float(x, default: float = np.nan) -> float:
@@ -123,15 +159,23 @@ def _build_feature_matrix(records: list) -> tuple:
     return X, y, le
 
 
-def run_feature_importance(buffer_path: Path, min_samples: int = 20) -> dict:
+def run_feature_importance(
+    buffer_path: Path,
+    min_samples: int = 20,
+    rolling_days: int = 0,
+) -> dict:
     """
     Run Random Forest feature importance on the experience buffer.
+    If rolling_days > 0, only use records from the last N days (avoids meta-overfitting to one day).
     Returns dict with feature_importances, model score, and suggested filter rules.
     """
     if not _HAS_SKLEARN:
         log.warning("scikit-learn not installed; run: pip install scikit-learn")
         return {}
     records = load_buffer(path=buffer_path)
+    if rolling_days > 0:
+        records = _filter_records_last_n_days(records, rolling_days)
+        log.info("Rolling window: using %d records from last %d days", len(records), rolling_days)
     if len(records) < min_samples:
         log.warning("Not enough records (%d < %d); skipping optimizer run.", len(records), min_samples)
         return {}
@@ -180,28 +224,88 @@ def run_feature_importance(buffer_path: Path, min_samples: int = 20) -> dict:
     }
 
 
+def promote_proposed_to_active() -> bool:
+    """
+    If proposed rules file exists and was written >= PROMOTE_AFTER_HOURS ago, copy to active (out-of-sample: new rules run on paper for 24h before going live).
+    Returns True if promotion happened.
+    """
+    if not GENERATED_RULES_PROPOSED_PATH.exists():
+        return False
+    try:
+        with open(GENERATED_RULES_PROPOSED_PATH) as f:
+            data = json.load(f)
+    except Exception as e:
+        log.warning("Could not read proposed rules: %s", e)
+        return False
+    written_ts = data.get("written_ts")
+    if not written_ts:
+        return False
+    try:
+        written = datetime.fromisoformat(written_ts.replace("Z", "+00:00"))
+    except Exception:
+        return False
+    age_hours = (datetime.now(timezone.utc) - written).total_seconds() / 3600
+    if age_hours < PROMOTE_AFTER_HOURS:
+        log.info("Proposed rules are %.1fh old (need %dh); skipping promotion", age_hours, PROMOTE_AFTER_HOURS)
+        return False
+    rules = data.get("generated_rules", [])
+    if not rules:
+        return False
+    GENERATED_RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(GENERATED_RULES_PATH, "w") as f:
+        json.dump({
+            "generated_rules": rules,
+            "feature_importances": data.get("feature_importances", {}),
+            "promoted_ts": datetime.now(timezone.utc).isoformat(),
+        }, f, indent=2)
+    log.info("Promoted %d proposed rules to active (were %.1fh old)", len(rules), age_hours)
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Strategy optimizer: feature importance + generated filter rules from experience buffer")
     parser.add_argument("--buffer", type=str, default="", help="Path to experience_buffer.jsonl (default: data/experience_buffer.jsonl)")
     parser.add_argument("--min-samples", type=int, default=20, help="Minimum trades to run analysis")
-    parser.add_argument("--write-rules", action="store_true", help="Write generated rules to GENERATED_RULES_PATH")
+    parser.add_argument("--rolling-days", type=int, default=0, help="Use only last N days of buffer (default 0 = all). Use 7 to avoid meta-overfitting.")
+    parser.add_argument("--write-rules", action="store_true", help="Write generated rules directly to active (GENERATED_RULES_PATH)")
+    parser.add_argument("--write-proposed", action="store_true", help="Write to proposed file with timestamp; promote to active only after 24h (use for daily cron)")
     args = parser.parse_args()
     buffer_path = Path(args.buffer) if args.buffer else None
     if buffer_path is None or not buffer_path.is_absolute():
-        from brain.experience_buffer import _buffer_path
+        from brain.learning.experience_buffer import _buffer_path
         buffer_path = _buffer_path()
     if not buffer_path.exists():
         log.warning("Buffer file not found: %s. Record trades first (experience buffer enabled).", buffer_path)
         return 0
-    result = run_feature_importance(buffer_path, min_samples=args.min_samples)
+
+    # Out-of-sample: promote proposed -> active if proposed is 24h+ old (before computing new proposed)
+    if args.write_proposed:
+        promote_proposed_to_active()
+
+    result = run_feature_importance(
+        buffer_path,
+        min_samples=args.min_samples,
+        rolling_days=args.rolling_days if args.rolling_days > 0 else (ROLLING_DAYS_DEFAULT if args.write_proposed else 0),
+    )
     if not result:
         return 0
-    if result.get("generated_rules") and args.write_rules:
-        out = GENERATED_RULES_PATH
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with open(out, "w") as f:
-            json.dump({"generated_rules": result["generated_rules"], "feature_importances": result.get("feature_importances", {})}, f, indent=2)
-        log.info("Wrote generated rules to %s", out)
+
+    if result.get("generated_rules"):
+        if args.write_proposed:
+            GENERATED_RULES_PROPOSED_PATH.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "written_ts": datetime.now(timezone.utc).isoformat(),
+                "generated_rules": result["generated_rules"],
+                "feature_importances": result.get("feature_importances", {}),
+            }
+            with open(GENERATED_RULES_PROPOSED_PATH, "w") as f:
+                json.dump(payload, f, indent=2)
+            log.info("Wrote proposed rules to %s (will promote to active after %dh)", GENERATED_RULES_PROPOSED_PATH, PROMOTE_AFTER_HOURS)
+        elif args.write_rules:
+            GENERATED_RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(GENERATED_RULES_PATH, "w") as f:
+                json.dump({"generated_rules": result["generated_rules"], "feature_importances": result.get("feature_importances", {})}, f, indent=2)
+            log.info("Wrote generated rules to %s", GENERATED_RULES_PATH)
     return 0
 
 

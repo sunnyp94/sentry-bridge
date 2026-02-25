@@ -283,13 +283,23 @@ def _try_place_order(
         qty = max(1, min(qty, brain_config.STRATEGY_MAX_QTY))
         d = Decision(d.action, d.symbol, qty, d.reason)
         log.info("position_size equity=%.2f price=%.2f pct=%.0f%% -> qty=%d", equity, price, pct * 100, qty)
+        # Active generated rules (promoted after 24h out-of-sample): block buy only when rule has data and matches
+        if d.action == "buy":
+            try:
+                from brain.learning.generated_rules import should_block_buy
+                ctx = (snapshot_context or {}).copy()
+                if should_block_buy(ctx):
+                    log.info("skip buy %s (generated_rule)", d.symbol)
+                    return False
+            except Exception as e:
+                log.debug("generated_rules check skipped: %s", e)
     price_str = f"{price:.2f}" if price is not None and price > 0 else "market"
     log.info("order %s %s qty=%d price=%s reason=%s", d.action.upper(), d.symbol, d.qty, price_str, d.reason or "")
     if place_order(d, current_price=price):
         last_order_time_by_symbol[d.symbol] = now
         # Experience buffer: record entry/exit snapshot for strategy optimizer
         try:
-            from brain.experience_buffer import record_entry, record_exit
+            from brain.learning.experience_buffer import record_entry, record_exit
             ctx = snapshot_context or {}
             if d.action == "buy" and price and price > 0:
                 record_entry(

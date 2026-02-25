@@ -20,6 +20,9 @@ python-brain/
     ├── log_config.py   # Logging init (LOG_LEVEL, stderr).
     ├── strategy.py     # Orchestrates signals + rules → buy/sell/hold.
     ├── executor.py     # Places orders on Alpaca; get_account_equity() for daily cap.
+    ├── learning/       # Learning from trades + generated filter rules (see brain/learning/README.md)
+    │   ├── experience_buffer.py  # Records entry/exit to data/experience_buffer.jsonl for the optimizer.
+    │   └── generated_rules.py    # Loads active rules; should_block_buy(context) before placing a buy.
     ├── signals/        # Score inputs for strategy
     │   ├── news_sentiment.py  # FinBERT/VADER on news (headline + summary).
     │   ├── composite.py       # News + Social (placeholder) + Momentum + optional Technical (RSI); consensus.
@@ -99,8 +102,8 @@ The brain includes an optional **experience buffer**, **attribution engine**, **
 
 | Component | Role | Config / Script |
 |-----------|------|-----------------|
-| **Experience Buffer** | Saves a `MarketSnapshot` (indicators, regime) on every entry and exit to `data/experience_buffer.jsonl`. Set `EXPERIENCE_BUFFER_MAX_LINES` (e.g. 100000) to keep only the last N lines so the file doesn't overflow. Conviction learns from an in-memory rolling window (last 100 per setup), not this file; the strategy optimizer trains on whatever is in the buffer, so a large window still gives plenty of recent trades. | `EXPERIENCE_BUFFER_ENABLED=true` (default). `EXPERIENCE_BUFFER_MAX_LINES=0` (no trim). |
-| **Attribution Engine** | Runs Random Forest feature importance on the buffer; suggests filter rules when a setup has &lt;40% success under a condition (e.g. block when ATR in top 10th percentile). | `python3 python-brain/apps/strategy_optimizer.py [--buffer path] [--min-samples 20] [--write-rules]`. Requires `scikit-learn`. |
+| **Experience Buffer** | In **brain/learning/**: saves a `MarketSnapshot` on every entry/exit to `data/experience_buffer.jsonl`. Set `EXPERIENCE_BUFFER_MAX_LINES` (e.g. 100000) to trim. Conviction uses in-memory window; optimizer trains on the buffer. | `EXPERIENCE_BUFFER_ENABLED=true` (default). See **brain/learning/README.md**. |
+| **Attribution Engine** | Runs Random Forest on the **experience buffer** (see **brain/learning/**). Suggests filter rules when a setup has &lt;40% success under a condition. Run daily after 4pm ET: `./scripts/run_optimizer_after_close.sh` or **docs/OPTIMIZER_DAILY.md**. Active rules are applied via **brain.learning.generated_rules** (`should_block_buy`). | `python3 python-brain/apps/strategy_optimizer.py [--write-proposed] [--rolling-days 7]`. Requires `scikit-learn`. |
 | **Shadow Strategy** | Tracks 3 ghost models (tighter/wide/scalp stop–TP) in parallel with live. No real orders; logs when a shadow outperforms over 30 ghost trades. | `SHADOW_STRATEGY_ENABLED=true` (default). |
 | **Conviction** | Reward +1 for profit, −2 for stop loss. Per-setup conviction scales position size (winning streak → up to 1.5×; losing → down to 0.5×). | `CONVICTION_SIZING_ENABLED=true` (default). |
 
