@@ -183,15 +183,25 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
 
 def close_all_positions(positions: List[Dict[str, Any]], reason: str = "flat_on_startup") -> int:
     """
-    Place market sell for each position. Used for flat-on-startup (safe restart).
-    positions: list of dicts with symbol, qty, optional side, optional current_price.
-    Returns number of orders submitted.
+    Cancel all open orders, then place market sell for each position.
+    Used for flat-on-startup (safe restart). You cannot sell a position while it has an open order.
+    positions: list of dicts with symbol, qty, optional side, optional current_price. May be empty (cancel-only).
+    Returns number of sell orders submitted.
     """
-    if not positions:
-        return 0
     client = _client()
     if client is None or MarketOrderRequest is None or OrderSide is None or TimeInForce is None:
         log.warning("close_all_positions: no client or alpaca; skip")
+        return 0
+    # Cancel all open orders first so position sells are not blocked (and to clear pending orders on restart)
+    try:
+        result = client.cancel_orders()
+        if isinstance(result, list) and result:
+            log.info("flat_on_startup: cancelled %d open order(s)", len(result))
+        elif result:
+            log.info("flat_on_startup: cancelled open orders")
+    except Exception as e:
+        log.warning("flat_on_startup: cancel_orders failed (will still try to close positions): %s", e)
+    if not positions:
         return 0
     placed = 0
     for p in positions:

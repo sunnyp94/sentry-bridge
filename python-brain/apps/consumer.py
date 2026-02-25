@@ -636,13 +636,11 @@ def handle_event(ev: dict) -> None:
             last_payload_by_symbol[sym] = {**last_payload_by_symbol.get(sym, {}), **payload}
     elif typ == "positions":
         global _last_equity, _flat_on_startup_done
-        # Flat-on-startup: close all positions once on first positions event (safe restart)
+        # Flat-on-startup: cancel all open orders and close all positions once on first positions event (safe restart)
         if getattr(brain_config, "FLAT_POSITIONS_ON_STARTUP", False) and not _flat_on_startup_done:
-            pos_list = payload.get("positions") or []
-            if pos_list:
-                from brain.executor import close_all_positions
-                close_all_positions(pos_list)
-                _flat_on_startup_done = True
+            from brain.executor import close_all_positions
+            close_all_positions(payload.get("positions") or [])
+            _flat_on_startup_done = True
         positions_qty.clear()
         position_unrealized_pl_pct.clear()
         position_entry_price.clear()
