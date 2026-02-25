@@ -198,6 +198,7 @@ position_current_price: dict[str, float] = {}
 _scaled_50_at_vwap: set = set()
 # Scale-out: levels (e.g. 0.01, 0.02, 0.03) already hit per symbol
 _scale_out_done: dict[str, set] = {}
+# Session: default "regular" so buys allowed unless pipe sends session=pre_open (or other). Only explicit non-regular blocks.
 session_by_symbol: dict[str, str] = defaultdict(lambda: "regular")
 ORDER_COOLDOWN_SEC = getattr(brain_config, "ORDER_COOLDOWN_SEC", 30)
 last_order_time_by_symbol: dict[str, float] = {}

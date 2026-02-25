@@ -33,13 +33,15 @@ def _int(name: str, default: str) -> int:
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
-# Daily profit target: make a small gain and stop (no new buys; optionally flat all)
+# Daily profit target: soft-cap trailing stop (code defaults only; no env)
+# Once daily PnL >= DAILY_PROFIT_TARGET_PCT (0.5%), a trailing stop activates: if PnL drops
+# SOFT_CAP_TRAILING_PCT (0.1%) from the day's peak, block new buys for the session. Runners keep running with scale-out.
 # Daily loss cap: no new buys when daily PnL <= -X% (stop the bleeding)
 # -----------------------------------------------------------------------------
 DAILY_CAP_ENABLED = _bool("DAILY_CAP_ENABLED", "true")
-# When portfolio is up this much for the day: no new buys (lock in gains, don't add risk). Let winners run unless FLAT_WHEN_DAILY_TARGET_HIT.
-DAILY_PROFIT_TARGET_PCT = _float("DAILY_PROFIT_TARGET_PCT", "0.25")  # 0.25% daily = no new buys; existing positions keep running
-DAILY_CAP_PCT = _float("DAILY_CAP_PCT", "0.25")  # no new buys when daily PnL >= this
+DAILY_PROFIT_TARGET_PCT = 0.5   # %: activation threshold; once hit, 0.1% trailing stop on daily PnL (code default only)
+DAILY_CAP_PCT = 0.5            # %: same as above for compatibility
+SOFT_CAP_TRAILING_PCT = 0.1    # %: once above target, if daily PnL drops this much from peak, kill session (no new buys)
 DAILY_LOSS_CAP_PCT = _float("DAILY_LOSS_CAP_PCT", "1.0")  # -1% daily loss = no new buys
 # Daily drawdown circuit breaker: pause ALL trading if daily loss >= this % (black-swan protection)
 DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT = _float("DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT", "5.0")  # 5% = pro standard

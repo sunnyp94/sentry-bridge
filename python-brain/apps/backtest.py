@@ -156,7 +156,7 @@ def run_backtest_unified(symbols: list[str], days: int = 90, initial_cash: float
         return None
     symbols_list = list(data_by_sym.keys())
     spy_below_200ma_list = _build_spy_below_200ma(bars_by_sym, n_min) if spy_regime_enabled else [False] * n_min
-    daily_target_pct = getattr(brain_config, "DAILY_PROFIT_TARGET_PCT", 0.1) / 100.0
+    daily_target_pct = getattr(brain_config, "DAILY_PROFIT_TARGET_PCT", 0.5) / 100.0
     max_qty = getattr(brain_config, "STRATEGY_MAX_QTY", 2)
     position_size_pct = getattr(brain_config, "POSITION_SIZE_PCT", 0.05)
     vol_max = getattr(brain_config, "VOL_MAX_FOR_ENTRY", 0)
