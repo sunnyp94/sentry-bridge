@@ -6,7 +6,8 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    # RDB only: one snapshot file overwritten on save (no unbounded AOF growth). Saves every 5 min if 10+ keys changed.
+    command: redis-server --save 300 10 --save 60 10000
     restart: unless-stopped
 
   app:
