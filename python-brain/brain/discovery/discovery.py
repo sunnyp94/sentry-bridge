@@ -20,7 +20,7 @@ except ImportError:
     ZoneInfo = None
 
 from brain.core import config as brain_config
-from brain.market.data import get_bars, get_bars_chunked
+from brain.market.data import get_bars, get_bars_chunked, filter_tradeable_symbols
 from brain.screener import get_universe, score_universe
 from brain.market.market_calendar import is_full_trading_day
 
@@ -113,6 +113,9 @@ def run_discovery(
     else:
         log.info("[DISCOVERY] PRIORITY WATCHLIST (RV+Z scored): %s | %s",
                  active, [(s, info.get("reason")) for s, info in scored])
+
+    # Exclude symbols that are not active/tradeable on Alpaca to avoid order rejections
+    active = filter_tradeable_symbols(active)
 
     if out_path:
         p = Path(out_path)

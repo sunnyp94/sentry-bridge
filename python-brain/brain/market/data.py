@@ -42,6 +42,49 @@ def get_tradeable_symbols_from_alpaca(limit: Optional[int] = None) -> List[str]:
     return symbols
 
 
+def filter_tradeable_symbols(symbols: List[str]) -> List[str]:
+    """
+    Return only symbols that are active and tradeable on Alpaca.
+    Used by discovery to avoid writing symbols that would cause "asset is not active" on order.
+    On API error or missing credentials, returns the original list (no change) so discovery is not broken.
+    """
+    if not symbols:
+        return symbols
+    try:
+        from alpaca.trading.client import TradingClient
+    except ImportError:
+        return symbols
+    key = os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY_ID")
+    secret = os.environ.get("APCA_API_SECRET_KEY") or os.environ.get("ALPACA_API_SECRET_KEY")
+    if not key or not secret:
+        return symbols
+    out: List[str] = []
+    try:
+        client = TradingClient(key, secret)
+        for sym in symbols:
+            s = (sym or "").strip().upper()
+            if not s:
+                continue
+            try:
+                asset = client.get_asset(s)
+                if asset is None:
+                    continue
+                if getattr(asset, "status", "") != "active":
+                    continue
+                if not getattr(asset, "tradable", True):
+                    continue
+                out.append(s)
+            except Exception:
+                _log.debug("filter_tradeable: skip %s (not active/tradeable)", s)
+                continue
+        if len(out) < len(symbols):
+            _log.info("filter_tradeable: kept %d of %d symbols (dropped non-tradeable)", len(out), len(symbols))
+    except Exception as e:
+        _log.warning("filter_tradeable_symbols failed: %s; using unfiltered list", e)
+        return symbols
+    return out if out else symbols
+
+
 def get_bars(symbols: List[str], days: int) -> Dict[str, pd.DataFrame]:
     """Fetch daily bars from Alpaca. Returns dict symbol -> DataFrame with columns open, high, low, close, volume (and c/h/l/v if raw)."""
     try:
