@@ -116,13 +116,21 @@ def main() -> int:
             log("Watching: %s" % _read_watchlist(out_path))
         except Exception as e:
             log("run_discovery failed: %s" % e)
+        # Use current time after discovery (discovery can take 2+ min); avoid sleeping past 09:30
+        now = now_et()
+        now_min = minutes_since_midnight(now)
+        if now_min >= end_min:
+            log("at or past market open after discovery; final handoff and exiting")
+            run_discovery(top_n=top_n, out_path=out_path)
+            _verify_handoff_file(out_path)
+            log("Watching: %s" % _read_watchlist(out_path))
+            return 0
         elapsed = (now_min - start_min) * 60 + now.second
         next_in = interval_sec - (elapsed % interval_sec)
         if next_in <= 0:
             next_in = interval_sec
         # If next run would be at or after 9:30, sleep until 9:30 then run once and exit
         if next_in >= (end_min - now_min) * 60 - now.second:
-            from datetime import datetime, timedelta
             today_end = now.replace(hour=end_et[0], minute=end_et[1], second=0, microsecond=0)
             if now < today_end:
                 secs = (today_end - now).total_seconds()
