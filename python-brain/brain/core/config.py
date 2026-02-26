@@ -49,6 +49,9 @@ DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT = _float("DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT"
 FLAT_WHEN_DAILY_TARGET_HIT = _bool("FLAT_WHEN_DAILY_TARGET_HIT", "false")
 # When True, on first positions event after startup close all positions (safe restart; default true).
 FLAT_POSITIONS_ON_STARTUP = _bool("FLAT_POSITIONS_ON_STARTUP", "true")
+# When to run flat-on-startup: default 09:30 ET = close all open positions at market open before execution (handles overnight positions). Code default only; do not require in .env.
+# Empty = close on first positions event (immediately after engine start).
+FLAT_POSITIONS_AT_ET = os.environ.get("FLAT_POSITIONS_AT_ET", "09:30").strip()
 
 # -----------------------------------------------------------------------------
 # Buy thresholds — Green Light uses PROB_GAIN_THRESHOLD only; others reserved for plug-in rules
@@ -242,6 +245,9 @@ CLOSE_LOSSES_BY_ET = os.environ.get("CLOSE_LOSSES_BY_ET", "15:50").strip()  # in
 # -----------------------------------------------------------------------------
 # Recursive strategy optimizer (experience buffer, conviction, shadow)
 # -----------------------------------------------------------------------------
+# When set, run strategy optimizer daily at this time ET on full trading days (e.g. 16:05 = 4:05pm ET).
+# Promotes proposed->active if 24h old, then runs optimizer with 7-day rolling window. Empty = disabled (use cron if desired).
+OPTIMIZER_RUN_AT_ET = os.environ.get("OPTIMIZER_RUN_AT_ET", "16:05").strip()  # 4:05pm ET
 EXPERIENCE_BUFFER_ENABLED = _bool("EXPERIENCE_BUFFER_ENABLED", "true")
 SHADOW_STRATEGY_ENABLED = _bool("SHADOW_STRATEGY_ENABLED", "true")
 CONVICTION_SIZING_ENABLED = _bool("CONVICTION_SIZING_ENABLED", "true")  # records outcomes only; does NOT scale buy size (always 5% equity)

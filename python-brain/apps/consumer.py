@@ -267,16 +267,16 @@ def _try_place_order(
         return False
     from brain.executor import place_order, get_account_equity
     price = price_override if price_override is not None and price_override > 0 else _get_price(d.symbol)
-    # Position sizing: always 5% of actual account equity from Alpaca (no fallback; skip buy if equity unavailable)
+    # Position sizing: always 5% of actual account equity from Alpaca (no fallback; skip buy if equity unavailable).
+    # We always fetch fresh equity when sizing a buy so stale _last_equity (e.g. when positions events fail) never causes oversizing.
+    # Note: position value can exceed 5% after entry (price up or equity down); we only enforce 5% at order time.
     if d.action == "buy":
         if not price or price <= 0:
             log.error("position_size: no price for %s; skipping buy", d.symbol)
             return False
-        equity = _last_equity
-        if equity is None or equity <= 0:
-            equity = get_account_equity()
-            if equity is not None:
-                _last_equity = equity
+        equity = get_account_equity()
+        if equity is not None and equity > 0:
+            _last_equity = equity
         if equity is None or equity <= 0:
             log.error("position_size: cannot get account equity from Alpaca; skipping buy for %s (check get_account_equity logs)", d.symbol)
             return False
@@ -636,11 +636,24 @@ def handle_event(ev: dict) -> None:
             last_payload_by_symbol[sym] = {**last_payload_by_symbol.get(sym, {}), **payload}
     elif typ == "positions":
         global _last_equity, _flat_on_startup_done
-        # Flat-on-startup: fetch positions from API, cancel orders, close all (once on first positions event)
+        # Flat-on-startup: fetch positions from API, cancel orders, close all (once on first positions event).
+        # If FLAT_POSITIONS_AT_ET is set (e.g. "09:30"), only run at or after that time ET so positions close at market open, not immediately.
         if getattr(brain_config, "FLAT_POSITIONS_ON_STARTUP", False) and not _flat_on_startup_done:
-            from brain.executor import close_all_positions_from_api
-            close_all_positions_from_api()
-            _flat_on_startup_done = True
+            run_flat = True
+            at_et = getattr(brain_config, "FLAT_POSITIONS_AT_ET", "").strip()
+            if at_et and ZoneInfo:
+                parsed = _parse_run_at_et(at_et)
+                if parsed:
+                    now_et = datetime.now(ZoneInfo("America/New_York"))
+                    run_flat = (now_et.hour, now_et.minute) >= parsed
+            if run_flat:
+                try:
+                    from brain.executor import close_all_positions_from_api
+                    close_all_positions_from_api()
+                except ImportError:
+                    from brain.executor import close_all_positions
+                    close_all_positions(payload.get("positions") or [])
+                _flat_on_startup_done = True
         positions_qty.clear()
         position_unrealized_pl_pct.clear()
         position_entry_price.clear()
@@ -740,6 +753,37 @@ def _run_scanner_at_startup() -> None:
         log.warning("scanner failed: %s", e)
 
 
+def _run_optimizer_after_close() -> None:
+    """Run the strategy optimizer (promote proposed->active, then run with 7-day rolling window)."""
+    import subprocess
+    root = Path(__file__).resolve().parent.parent.parent
+    script = root / "python-brain" / "apps" / "strategy_optimizer.py"
+    if not script.exists():
+        script = root / "apps" / "strategy_optimizer.py"
+    if not script.exists():
+        log.warning("strategy_optimizer.py not found at %s; skip optimizer run", script)
+        return
+    try:
+        et_now = datetime.now(ZoneInfo("America/New_York")).strftime("%H:%M") if ZoneInfo else "post-market"
+        log.info("running strategy optimizer (post-market) at %s ET", et_now)
+        result = subprocess.run(
+            [sys.executable, str(script), "--write-proposed", "--rolling-days", "7"],
+            cwd=str(root),
+            env=os.environ,
+            timeout=600,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            log.info("strategy optimizer finished")
+        else:
+            log.warning("strategy optimizer exited %s: %s", result.returncode, (result.stderr or result.stdout or "")[:500])
+    except subprocess.TimeoutExpired:
+        log.warning("strategy optimizer timed out after 600s")
+    except Exception as e:
+        log.warning("strategy optimizer failed: %s", e)
+
+
 def _parse_run_at_et(s: str) -> Optional[tuple]:
     """Parse SCREENER_RUN_AT_ET (e.g. '07:00' or '7:00') -> (hour, minute) or None."""
     s = (s or "").strip()
@@ -793,6 +837,36 @@ def _scheduler_loop() -> None:
             log.info("skip scanner: %s is not a full trading day", run_date)
 
 
+def _optimizer_scheduler_loop() -> None:
+    """Background loop: at OPTIMIZER_RUN_AT_ET (e.g. 16:05 = 4:05pm ET) on full trading days, run the strategy optimizer."""
+    run_at = getattr(brain_config, "OPTIMIZER_RUN_AT_ET", "").strip()
+    parsed = _parse_run_at_et(run_at)
+    if not parsed or not ZoneInfo:
+        if run_at:
+            log.warning("optimizer scheduler disabled: OPTIMIZER_RUN_AT_ET=%r or no zoneinfo", run_at)
+        return
+    hour, minute = parsed
+    et = ZoneInfo("America/New_York")
+    log.info("optimizer scheduler started; will run at %02d:%02d ET on full trading days", hour, minute)
+    while True:
+        now_et = datetime.now(et)
+        today_run = now_et.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now_et >= today_run:
+            next_run = today_run + timedelta(days=1)
+        else:
+            next_run = today_run
+        sleep_secs = (next_run - now_et).total_seconds()
+        if sleep_secs > 0:
+            log.debug("optimizer next run at %s ET (in %.0fs)", next_run, sleep_secs)
+            time.sleep(sleep_secs)
+        run_date = next_run.date()
+        if is_full_trading_day(run_date):
+            log.info("running strategy optimizer at %02d:%02d ET", hour, minute)
+            _run_optimizer_after_close()
+        else:
+            log.info("skip optimizer: %s is not a full trading day", run_date)
+
+
 def main() -> None:
     from brain.log_config import init as init_logging
     init_logging()
@@ -830,6 +904,11 @@ def main() -> None:
             threading.Thread(target=engine.run_loop, daemon=True).start()
         active = _get_active_symbols()
         log.info("opportunity_engine enabled; active_symbols from %s: %s", path or "(no file)", list(active)[:20] if active else [])
+
+    # Strategy optimizer: run at OPTIMIZER_RUN_AT_ET (default 16:05 = 4:05pm ET) on full trading days.
+    optimizer_run_at = getattr(brain_config, "OPTIMIZER_RUN_AT_ET", "").strip()
+    if optimizer_run_at and _parse_run_at_et(optimizer_run_at) and ZoneInfo:
+        threading.Thread(target=_optimizer_scheduler_loop, daemon=True).start()
 
     log.info("reading from stdin (NDJSON)")
     if os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY_ID"):

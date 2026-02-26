@@ -95,7 +95,8 @@ def main() -> int:
             continue
         now_min = minutes_since_midnight(now)
         if now_min >= end_min:
-            log("at or past market open; running final discovery and exiting")
+            # Always run discovery when at or past market open so we get a fresh list for the day (do not skip just because file already has symbols).
+            log("at or past market open; running discovery once and exiting")
             run_discovery(top_n=top_n, out_path=out_path)
             _verify_handoff_file(out_path)
             log("Watching: %s" % _read_watchlist(out_path))
@@ -120,9 +121,8 @@ def main() -> int:
         now = now_et()
         now_min = minutes_since_midnight(now)
         if now_min >= end_min:
-            log("at or past market open after discovery; final handoff and exiting")
-            run_discovery(top_n=top_n, out_path=out_path)
-            _verify_handoff_file(out_path)
+            # We just ran discovery above, so handoff file is fresh; exit (no second run).
+            log("at or past market open after discovery; exiting")
             log("Watching: %s" % _read_watchlist(out_path))
             return 0
         elapsed = (now_min - start_min) * 60 + now.second
@@ -136,7 +136,7 @@ def main() -> int:
                 secs = (today_end - now).total_seconds()
                 log("sleeping until market open %02d:%02d ET (%.0fs)" % (end_et[0], end_et[1], secs))
                 time.sleep(secs)
-            # Run final discovery and exit
+            # Always run discovery at market open for a fresh list (do not skip just because file has symbols).
             log("market open; final discovery handoff")
             run_discovery(top_n=top_n, out_path=out_path)
             _verify_handoff_file(out_path)
