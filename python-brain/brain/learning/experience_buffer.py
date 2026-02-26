@@ -232,8 +232,11 @@ def load_buffer(path: Optional[Path] = None, max_lines: Optional[int] = None) ->
                 line = line.strip()
                 if not line:
                     continue
-                out.append(json.loads(line))
-    except Exception as e:
+                try:
+                    out.append(json.loads(line))
+                except (ValueError, TypeError) as e:
+                    log.debug("experience_buffer skip invalid line %d: %s", i + 1, e)
+    except OSError as e:
         log.warning("experience_buffer load failed: %s", e)
     return out
 

@@ -193,6 +193,8 @@ def decide(
     if trail_atr_above and have_position and vwap_distance_pct is not None and vwap_distance_pct >= 0:
         if entry_price and entry_price > 0 and current_price and current_price > 0 and atr_stop_pct and atr_stop_pct > 0 and peak_unrealized_pl_pct is not None:
             atr_mult = getattr(config, "ATR_STOP_MULTIPLE", 2.0)
+            if not atr_mult or atr_mult <= 0:
+                atr_mult = 2.0  # avoid division by zero
             trail_mult = getattr(config, "TRAILING_ATR_MULTIPLE", 1.5)
             peak_price = entry_price * (1.0 + peak_unrealized_pl_pct)
             atr_price = current_price * (atr_stop_pct / 100.0) / atr_mult  # ATR in price terms
@@ -205,7 +207,8 @@ def decide(
     if be_halfway and have_position and entry_price and entry_price > 0 and current_price and current_price > 0 and vwap_distance_pct is not None:
         vwap_val = current_price / (1.0 + vwap_distance_pct / 100.0)
         if vwap_val > entry_price:
-            progress = (current_price - entry_price) / (vwap_val - entry_price)
+            denom = vwap_val - entry_price
+            progress = (current_price - entry_price) / denom if denom > 0 else 0.0
             if progress >= 0.5 and unrealized_pl_pct is not None and unrealized_pl_pct <= 0:
                 return Decision("sell", symbol, min(abs(position_qty), max_qty), f"breakeven_halfway_to_vwap pl={unrealized_pl_pct*100:.2f}%")
 

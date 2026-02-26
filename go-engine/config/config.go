@@ -62,6 +62,7 @@ func Load() (*Config, error) {
 		RedisStream:           envOrDefault("REDIS_STREAM", "market:updates"),
 		BrainCmd:              brainCmd,
 		PositionsIntervalSec:  positionsIntervalSec,
+		MarketCloseET:         envOrDefault("MARKET_CLOSE_ET", "16:00"),
 	}, nil
 }
 
@@ -134,4 +135,5 @@ type Config struct {
 	RedisStream          string   // Stream name, default market:updates
 	BrainCmd             string   // Command to start Python brain, e.g. python3 python-brain/consumer.py
 	PositionsIntervalSec int      // How often to fetch positions/orders (5–300s); default 15 (production-like)
+	MarketCloseET        string   // "16:00" = 4pm ET; engine exits at this time so entrypoint can sleep until 7am then discovery (set 13:00 for half-days)
 }

@@ -36,6 +36,8 @@ def get_kelly_fraction() -> Optional[float]:
     if avg_loss <= 0:
         return None
     b = avg_win / avg_loss
+    if b <= 0:
+        return None  # avoid division by zero in kelly formula
     kelly = (w * b - (1 - w)) / b
     if kelly <= 0:
         return 0.0

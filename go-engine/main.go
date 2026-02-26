@@ -6,9 +6,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +44,24 @@ func initLogger() {
 		h = slog.NewTextHandler(os.Stderr, opts)
 	}
 	slog.SetDefault(slog.New(h))
+}
+
+// parseMarketCloseET parses "HH:MM" (e.g. "16:00") and returns (hour, minute). Returns (-1, -1) if invalid.
+func parseMarketCloseET(s string) (hour, minute int) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return -1, -1
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 {
+		return -1, -1
+	}
+	h, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	m, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil || h < 0 || h > 23 || m < 0 || m > 59 {
+		return -1, -1
+	}
+	return h, m
 }
 
 func main() {
@@ -250,6 +270,35 @@ func runStreaming(cfg *config.Config) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	// Exit at market close ET (default 4pm) so entrypoint can sleep until 7am then run discovery 7–9:30.
+	if closeHour, closeMin := parseMarketCloseET(cfg.MarketCloseET); closeHour >= 0 {
+		go func() {
+			loc, err := time.LoadLocation("America/New_York")
+			if err != nil {
+				slog.Warn("market close check disabled", "err", err)
+				return
+			}
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					now := time.Now().In(loc)
+					if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
+						continue
+					}
+					if now.Hour() > closeHour || (now.Hour() == closeHour && now.Minute() >= closeMin) {
+						slog.Info("market close; exiting so entrypoint can sleep until 7am then discovery", "at_et", fmt.Sprintf("%02d:%02d", closeHour, closeMin))
+						stop()
+						os.Exit(0)
+					}
+				}
+			}
+		}()
+	}
 
 	// Volatility refresh every 5 min
 	go func() {

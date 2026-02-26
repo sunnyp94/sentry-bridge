@@ -269,7 +269,7 @@ def _try_place_order(
     price = price_override if price_override is not None and price_override > 0 else _get_price(d.symbol)
     # Position sizing: always 5% of actual account equity from Alpaca (no fallback; skip buy if equity unavailable).
     # We always fetch fresh equity when sizing a buy so stale _last_equity (e.g. when positions events fail) never causes oversizing.
-    # Note: position value can exceed 5% after entry (price up or equity down); we only enforce 5% at order time.
+    # Cap by existing position (and optimistic) so we never double-buy before positions event arrives; hard cap 6% per symbol.
     if d.action == "buy":
         if not price or price <= 0:
             log.error("position_size: no price for %s; skipping buy", d.symbol)
@@ -280,12 +280,28 @@ def _try_place_order(
         if equity is None or equity <= 0:
             log.error("position_size: cannot get account equity from Alpaca; skipping buy for %s (check get_account_equity logs)", d.symbol)
             return False
-        # Always 5% of account equity (no conviction/SPY multipliers)
         pct = getattr(brain_config, "POSITION_SIZE_PCT", 0.05)
-        qty = int((equity * pct) / price) if pct > 0 else 1
+        max_pct_per_sym = 0.06  # hard cap so no single symbol exceeds 6% (safety)
+        existing_qty = positions_qty.get(d.symbol, 0) or 0
+        try:
+            existing_qty = int(existing_qty)
+        except (TypeError, ValueError):
+            existing_qty = 0
+        target_dollar = equity * pct
+        existing_value = existing_qty * price
+        remaining_dollar = max(0.0, target_dollar - existing_value)
+        cap_dollar = (equity * max_pct_per_sym) - existing_value
+        remaining_dollar = min(remaining_dollar, max(0.0, cap_dollar))
+        qty = int(remaining_dollar / price) if price > 0 and remaining_dollar >= price else 0
+        if qty <= 0:
+            if existing_qty > 0:
+                log.info("position_size: %s already at/over 5%% (qty=%d); skip add", d.symbol, existing_qty)
+            else:
+                log.warning("position_size: qty would be 0 for %s; skip buy", d.symbol)
+            return False
         qty = max(1, min(qty, brain_config.STRATEGY_MAX_QTY))
         d = Decision(d.action, d.symbol, qty, d.reason)
-        log.info("position_size equity=%.2f price=%.2f pct=%.0f%% -> qty=%d", equity, price, pct * 100, qty)
+        log.info("position_size equity=%.2f price=%.2f pct=%.0f%% existing_qty=%d -> qty=%d", equity, price, pct * 100, existing_qty, qty)
         # Active generated rules (promoted after 24h out-of-sample): block buy only when rule has data and matches
         if d.action == "buy":
             try:
@@ -300,6 +316,11 @@ def _try_place_order(
     log.info("order %s %s qty=%d price=%s reason=%s", d.action.upper(), d.symbol, d.qty, price_str, d.reason or "")
     if place_order(d, current_price=price):
         last_order_time_by_symbol[d.symbol] = now
+        # Optimistic update: count this order as position so we don't double-buy before next positions event
+        if d.action == "buy":
+            positions_qty[d.symbol] = positions_qty.get(d.symbol, 0) + d.qty
+        elif d.action == "sell":
+            positions_qty[d.symbol] = positions_qty.get(d.symbol, 0) - d.qty
         # Experience buffer: record entry/exit snapshot for strategy optimizer
         try:
             from brain.learning.experience_buffer import record_entry, record_exit

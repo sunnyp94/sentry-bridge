@@ -76,12 +76,14 @@ def main() -> int:
     start_min = start_et[0] * 60 + start_et[1]
     end_min = end_et[0] * 60 + end_et[1]
     interval_sec = interval_min * 60
+    close_et = _parse_et_time(getattr(brain_config, "MARKET_CLOSE_ET", "16:00"))
+    close_min = close_et[0] * 60 + close_et[1]
 
     def log(msg: str) -> None:
         print("[discovery_until_open] " + msg, file=sys.stderr, flush=True)
 
-    log("Eastern time; discovery %02d:%02d–%02d:%02d ET every %d min -> %s" % (
-        start_et[0], start_et[1], end_et[0], end_et[1], interval_min, out_path))
+    log("Eastern time; discovery %02d:%02d–%02d:%02d ET every %d min; market close %02d:%02d ET -> %s" % (
+        start_et[0], start_et[1], end_et[0], end_et[1], interval_min, close_et[0], close_et[1], out_path))
 
     while True:
         now = now_et()
@@ -94,6 +96,18 @@ def main() -> int:
             time.sleep(3600)
             continue
         now_min = minutes_since_midnight(now)
+        # After market close: sleep until 7am next day (then discovery runs 7:00–9:30).
+        if now_min >= close_min:
+            from datetime import datetime, timedelta
+            tomorrow = (now.date() + timedelta(days=1))
+            next_7am = now.replace(year=tomorrow.year, month=tomorrow.month, day=tomorrow.day,
+                                  hour=start_et[0], minute=start_et[1], second=0, microsecond=0)
+            secs = (next_7am - now).total_seconds()
+            if secs <= 0:
+                continue  # already past 7am next day (e.g. long sleep or clock skew)
+            log("market closed; sleeping until 7am ET (%.0fs)" % secs)
+            time.sleep(min(secs, 3600 * 18))
+            continue
         if now_min >= end_min:
             # Always run discovery when at or past market open so we get a fresh list for the day (do not skip just because file already has symbols).
             log("at or past market open; running discovery once and exiting")
@@ -102,13 +116,14 @@ def main() -> int:
             log("Watching: %s" % _read_watchlist(out_path))
             return 0
         if now_min < start_min:
-            # Sleep until discovery start (e.g. 7:00 ET)
+            # Sleep until discovery start (e.g. 7:00 ET); cap 1h per iteration so we re-check weekend/close
             from datetime import datetime, timedelta
             today_start = now.replace(hour=start_et[0], minute=start_et[1], second=0, microsecond=0)
             secs = (today_start - now).total_seconds()
-            if secs > 0:
-                log("sleeping until %02d:%02d ET (%.0fs)" % (start_et[0], start_et[1], secs))
-                time.sleep(min(secs, 3600))
+            if secs <= 0:
+                continue  # already at or past 7am (e.g. clock skew)
+            log("sleeping until %02d:%02d ET (%.0fs)" % (start_et[0], start_et[1], secs))
+            time.sleep(min(secs, 3600))
             continue
         # In window [start_et, 9:30): run discovery every 5 min
         log("Running discovery (fetching bars, scoring)...")
