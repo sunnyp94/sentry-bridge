@@ -2,7 +2,8 @@
 """
 Pre-market discovery: run from container start until market open (9:30 ET).
 - From 7:00 ET: run discovery every 5 min, write Priority Watchlist to ACTIVE_SYMBOLS_FILE.
-- At 9:30 ET: run discovery once (handoff), then exit so entrypoint can start the Go engine.
+- If the next 5-min rerun would be at or after 9:30: sleep until 9:30, then use existing
+  active_symbols file and exit (no final discovery run).
 - If already at or after 9:30 when started: run discovery once and exit (Go will read the file).
 All times Eastern. Run this once; at 9:30 the engine starts and watches the hand-picked list.
 """
@@ -177,16 +178,14 @@ def main() -> int:
         next_in = interval_sec - (elapsed % interval_sec)
         if next_in <= 0:
             next_in = interval_sec
-        # If next run would be at or after 9:30, sleep until 9:30 then run once and exit
+        # If next run would be at or after 9:30, don't run discovery again — use existing file and exit
         if next_in >= (end_min - now_min) * 60 - now.second:
             today_end = now.replace(hour=end_et[0], minute=end_et[1], second=0, microsecond=0)
             secs = max(0, (today_end - now).total_seconds())
             if secs > 0:
-                log("sleeping until market open %02d:%02d ET (%.0fs)" % (end_et[0], end_et[1], secs))
+                log("sleeping until market open %02d:%02d ET (%.0fs); will use existing active_symbols" % (end_et[0], end_et[1], secs))
                 time.sleep(secs)
-            # Always run discovery at market open for a fresh list (do not skip just because file has symbols).
-            log("market open; final discovery handoff")
-            run_discovery(top_n=top_n, out_path=out_path)
+            log("market open; using existing active_symbols (skipping final discovery run)")
             _verify_handoff_file(out_path)
             log("Watching: %s" % _read_watchlist(out_path))
             return 0

@@ -737,7 +737,8 @@ def handle_event(ev: dict) -> None:
 
 
 def _run_scanner_at_startup() -> None:
-    """Run the stock scanner once to refresh the daily opportunity pool (startup or 8am ET)."""
+    """Run the stock scanner once to refresh the daily opportunity pool (startup or 8am ET).
+    May be invoked from a background thread at startup so the consumer can read stdin immediately."""
     path = getattr(brain_config, "ACTIVE_SYMBOLS_FILE", "").strip()
     if not path:
         return
@@ -906,9 +907,10 @@ def main() -> None:
                 ):
                     run_discovery(top_n=getattr(brain_config, "DISCOVERY_TOP_N", 10))
                 else:
-                    _run_scanner_at_startup()
+                    # Run in background so we don't block stdin loop (scanner can take 2–5 min).
+                    threading.Thread(target=_run_scanner_at_startup, daemon=True).start()
             else:
-                _run_scanner_at_startup()
+                threading.Thread(target=_run_scanner_at_startup, daemon=True).start()
         if path and run_at_et and _parse_run_at_et(run_at_et):
             t = threading.Thread(target=_scheduler_loop, daemon=True)
             t.start()
