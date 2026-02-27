@@ -318,6 +318,11 @@ def _try_place_order(
                 log.debug("generated_rules check skipped: %s", e)
     price_str = f"{price:.2f}" if price is not None and price > 0 else "market"
     log.info("order %s %s qty=%d price=%s reason=%s", d.action.upper(), d.symbol, d.qty, price_str, d.reason or "")
+    # Ensure order lines appear in log file: log to root and flush (handles hierarchy/buffering on some setups)
+    logging.getLogger().info("ORDER %s %s qty=%d price=%s reason=%s", d.action.upper(), d.symbol, d.qty, price_str, d.reason or "")
+    for h in logging.getLogger().handlers:
+        if getattr(h, "flush", None):
+            h.flush()
     if place_order(d, current_price=price):
         last_order_time_by_symbol[d.symbol] = now
         # Optimistic update: count this order as position so we don't double-buy before next positions event
