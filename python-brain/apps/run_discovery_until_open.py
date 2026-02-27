@@ -52,6 +52,38 @@ def _verify_handoff_file(out_path: str) -> None:
         raise SystemExit("[discovery_until_open] handoff file missing or empty: %s" % out_path)
 
 
+def _run_optimizer_after_close() -> None:
+    """Run strategy optimizer once after market close (self-learning phase). Uses same data/ as app. Non-fatal on failure."""
+    import subprocess
+    def _log(msg: str) -> None:
+        print("[discovery_until_open] " + msg, file=sys.stderr, flush=True)
+    root = _root.parent  # repo root (sentry-bridge or /app in Docker)
+    script = root / "python-brain" / "apps" / "strategy_optimizer.py"
+    if not script.exists():
+        script = root / "apps" / "strategy_optimizer.py"
+    if not script.exists():
+        _log("strategy_optimizer.py not found; skip self-learning run")
+        return
+    try:
+        _log("running strategy optimizer (post-market self-learning)...")
+        result = subprocess.run(
+            [sys.executable, str(script), "--write-proposed", "--rolling-days", "7"],
+            cwd=str(root),
+            env=os.environ,
+            timeout=600,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            _log("strategy optimizer finished")
+        else:
+            _log("strategy optimizer exited %s: %s" % (result.returncode, (result.stderr or result.stdout or "")[:300]))
+    except subprocess.TimeoutExpired:
+        _log("strategy optimizer timed out after 600s")
+    except Exception as e:
+        _log("strategy optimizer failed: %s" % e)
+
+
 def main() -> int:
     init_logging()
     if not ZoneInfo:
@@ -96,8 +128,9 @@ def main() -> int:
             time.sleep(3600)
             continue
         now_min = minutes_since_midnight(now)
-        # After market close: sleep until 7am next day (then discovery runs 7:00–9:30).
+        # After market close: run self-learning (strategy optimizer) once, then sleep until 7am next day.
         if now_min >= close_min:
+            _run_optimizer_after_close()
             from datetime import datetime, timedelta
             tomorrow = (now.date() + timedelta(days=1))
             next_7am = now.replace(year=tomorrow.year, month=tomorrow.month, day=tomorrow.day,
@@ -147,8 +180,8 @@ def main() -> int:
         # If next run would be at or after 9:30, sleep until 9:30 then run once and exit
         if next_in >= (end_min - now_min) * 60 - now.second:
             today_end = now.replace(hour=end_et[0], minute=end_et[1], second=0, microsecond=0)
-            if now < today_end:
-                secs = (today_end - now).total_seconds()
+            secs = max(0, (today_end - now).total_seconds())
+            if secs > 0:
                 log("sleeping until market open %02d:%02d ET (%.0fs)" % (end_et[0], end_et[1], secs))
                 time.sleep(secs)
             # Always run discovery at market open for a fresh list (do not skip just because file has symbols).
