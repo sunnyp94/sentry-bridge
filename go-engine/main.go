@@ -1,5 +1,5 @@
 // Package main runs the Sentry Bridge engine: streams Alpaca market data (trades, quotes, news),
-// computes volatility, and pushes events to a Python brain (stdin pipe) and optionally Redis.
+// computes volatility, and pushes events to a Python brain (stdin pipe).
 // The Python brain decides buy/sell and places paper orders via Alpaca. Set STREAM=false for one-shot REST mode.
 package main
 
@@ -18,7 +18,6 @@ import (
 	"github.com/sunnyp94/sentry-bridge/go-engine/alpaca"
 	"github.com/sunnyp94/sentry-bridge/go-engine/brain"
 	"github.com/sunnyp94/sentry-bridge/go-engine/config"
-	"github.com/sunnyp94/sentry-bridge/go-engine/redis"
 )
 
 // initLogger configures slog from LOG_LEVEL (DEBUG/INFO/WARN/ERROR) and LOG_FORMAT (json or text).
@@ -87,7 +86,7 @@ func main() {
 	runOneShot(cfg)
 }
 
-// runStreaming: WebSocket price + news, volatility refresh every 5 min; push all to Redis for Python brain.
+// runStreaming: WebSocket price + news, volatility refresh every 5 min; pipe events directly to Python brain.
 func runStreaming(cfg *config.Config) {
 	slog.Info("streaming mode", "data_url", cfg.DataBaseURL, "stream_url", cfg.StreamWSURL, "tickers", cfg.Tickers)
 
@@ -106,18 +105,6 @@ func runStreaming(cfg *config.Config) {
 		}
 	}
 
-	// Redis (optional; for replay or other consumers)
-	var pub redis.PublisherInterface = redis.NoopPublisher{}
-	if cfg.RedisURL != "" {
-		if p, err := redis.NewPublisher(cfg.RedisURL, cfg.RedisStream); err != nil {
-			slog.Error("redis not connected", "err", err)
-		} else {
-			pub = p
-			defer p.Close()
-			slog.Info("redis stream", "stream", cfg.RedisStream)
-		}
-	}
-
 	// Brain state: price/volume history for returns and volume_1m/5m
 	state := brain.NewState()
 
@@ -125,7 +112,7 @@ func runStreaming(cfg *config.Config) {
 	var volMu sync.RWMutex
 	volatility := make(map[string]float64)
 
-	// Initial volatility and push to Redis
+	// Initial volatility and push to brain
 	updateVolatility := func() {
 		barsResp, err := client.GetBars(cfg.Tickers, "1Day", 30)
 		if err != nil {
@@ -142,7 +129,7 @@ func runStreaming(cfg *config.Config) {
 		}
 		volMu.Unlock()
 		state.SetVolatilityMap(volatility)
-		// Push volatility snapshot to Redis (one event per symbol)
+		// Push volatility snapshot to brain (one event per symbol)
 		for _, sym := range cfg.Tickers {
 			volMu.RLock()
 			v := volatility[sym]
@@ -154,9 +141,6 @@ func runStreaming(cfg *config.Config) {
 					_ = brainPipe.Send("volatility", payload)
 					slog.Debug("latency", "step", "brain_send", "type", "volatility", "ms", time.Since(t0).Milliseconds())
 				}
-				t0 := time.Now()
-				redis.LogErr(pub.PublishJSON(context.Background(), "volatility", payload), "volatility")
-				slog.Debug("latency", "step", "redis_publish", "type", "volatility", "ms", time.Since(t0).Milliseconds())
 			}
 		}
 		volMu.RLock()
@@ -169,7 +153,7 @@ func runStreaming(cfg *config.Config) {
 	}
 	updateVolatility()
 
-	// Price stream (trades + quotes) — update state and push to Redis
+	// Price stream (trades + quotes) — update state and send to brain
 	priceStream := alpaca.NewPriceStream(cfg.StreamWSURL, cfg.APIKeyID, cfg.APISecretKey, cfg.DataFeed, cfg.Tickers)
 	lastPrint := make(map[string]time.Time)
 	var printMu sync.Mutex
@@ -184,8 +168,8 @@ func runStreaming(cfg *config.Config) {
 			"size":       size,
 			"volume_1m":  state.Volume1m(symbol),
 			"volume_5m":  state.Volume5m(symbol),
-			"return_1m": state.Return1m(symbol, price),
-			"return_5m": state.Return5m(symbol, price),
+			"return_1m":  state.Return1m(symbol, price),
+			"return_5m":  state.Return5m(symbol, price),
 			"session":    brain.Session(time.Now()),
 			"volatility": vol,
 		}
@@ -194,9 +178,6 @@ func runStreaming(cfg *config.Config) {
 			_ = brainPipe.Send("trade", payload)
 			slog.Debug("latency", "step", "brain_send", "type", "trade", "ms", time.Since(t0).Milliseconds())
 		}
-		t0 := time.Now()
-		redis.LogErr(pub.PublishJSON(context.Background(), "trade", payload), "trade")
-		slog.Debug("latency", "step", "redis_publish", "type", "trade", "ms", time.Since(t0).Milliseconds())
 		printMu.Lock()
 		now := time.Now()
 		if now.Sub(lastPrint[symbol]) >= time.Second {
@@ -212,16 +193,16 @@ func runStreaming(cfg *config.Config) {
 		volMu.RUnlock()
 		payload := map[string]interface{}{
 			"symbol":     symbol,
-			"bid":       bid,
-			"ask":       ask,
-			"bid_size":  bidSize,
-			"ask_size":  askSize,
-			"mid":       mid,
-			"volume_1m": state.Volume1m(symbol),
-			"volume_5m": state.Volume5m(symbol),
-			"return_1m": state.Return1m(symbol, mid),
-			"return_5m": state.Return5m(symbol, mid),
-			"session":   brain.Session(time.Now()),
+			"bid":        bid,
+			"ask":        ask,
+			"bid_size":   bidSize,
+			"ask_size":   askSize,
+			"mid":        mid,
+			"volume_1m":  state.Volume1m(symbol),
+			"volume_5m":  state.Volume5m(symbol),
+			"return_1m":  state.Return1m(symbol, mid),
+			"return_5m":  state.Return5m(symbol, mid),
+			"session":    brain.Session(time.Now()),
 			"volatility": vol,
 		}
 		if brainPipe != nil {
@@ -229,9 +210,6 @@ func runStreaming(cfg *config.Config) {
 			_ = brainPipe.Send("quote", payload)
 			slog.Debug("latency", "step", "brain_send", "type", "quote", "ms", time.Since(t0).Milliseconds())
 		}
-		t0 := time.Now()
-		redis.LogErr(pub.PublishJSON(context.Background(), "quote", payload), "quote")
-		slog.Debug("latency", "step", "redis_publish", "type", "quote", "ms", time.Since(t0).Milliseconds())
 		printMu.Lock()
 		now := time.Now()
 		if now.Sub(lastPrint[symbol]) >= time.Second {
@@ -241,7 +219,7 @@ func runStreaming(cfg *config.Config) {
 		printMu.Unlock()
 	}
 
-	// News stream — push full article to Redis
+	// News stream — send full article to brain
 	newsStream := alpaca.NewNewsStream(cfg.StreamWSURL, cfg.APIKeyID, cfg.APISecretKey, cfg.Tickers)
 	newsStream.OnNews = func(a alpaca.NewsArticle) {
 		payloadBytes, _ := json.Marshal(map[string]interface{}{
@@ -262,9 +240,6 @@ func runStreaming(cfg *config.Config) {
 			_ = brainPipe.Send("news", payload)
 			slog.Debug("latency", "step", "brain_send", "type", "news", "ms", time.Since(t0).Milliseconds())
 		}
-		t0 := time.Now()
-		redis.LogErr(pub.PublishJSON(context.Background(), "news", payload), "news")
-		slog.Debug("latency", "step", "redis_publish", "type", "news", "ms", time.Since(t0).Milliseconds())
 		slog.Info("news", "symbols", strings.Join(a.Symbols, ","), "headline", a.Headline, "created_at", a.CreatedAt, "source", a.Source)
 	}
 
@@ -342,9 +317,6 @@ func runStreaming(cfg *config.Config) {
 				slog.Debug("latency", "step", "brain_send", "type", "positions", "ms", time.Since(t0).Milliseconds())
 			}
 			t0 = time.Now()
-			redis.LogErr(pub.Publish(context.Background(), redis.BrainEvent{Type: "positions", Payload: map[string]interface{}{"positions": posPayload}}), "positions")
-			slog.Debug("latency", "step", "redis_publish", "type", "positions", "ms", time.Since(t0).Milliseconds())
-			t0 = time.Now()
 			orders, err := tradingClient.GetOpenOrders()
 			if err != nil {
 				slog.Error("trading orders error", "err", err)
@@ -364,9 +336,6 @@ func runStreaming(cfg *config.Config) {
 				_ = brainPipe.Send("orders", map[string]interface{}{"orders": ordPayload})
 				slog.Debug("latency", "step", "brain_send", "type", "orders", "ms", time.Since(t0).Milliseconds())
 			}
-			t0 = time.Now()
-			redis.LogErr(pub.Publish(context.Background(), redis.BrainEvent{Type: "orders", Payload: map[string]interface{}{"orders": ordPayload}}), "orders")
-			slog.Debug("latency", "step", "redis_publish", "type", "orders", "ms", time.Since(t0).Milliseconds())
 		}
 		pushPositionsAndOrders()
 		for {

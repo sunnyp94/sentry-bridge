@@ -1,15 +1,5 @@
-# Full stack: Go engine + Redis + Python brain. Same file for local and deploy.
+# Full stack: Go engine + Python brain. Same file for local and deploy.
 services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    # RDB only: one snapshot file overwritten on save (no unbounded AOF growth). Saves every 5 min if 10+ keys changed.
-    command: redis-server --save 300 10 --save 60 10000
-    restart: unless-stopped
-
   app:
     # When DOCKER_IMAGE is set (e.g. on GCP VM deploy), pull from registry; else build locally
     image: ${DOCKER_IMAGE:-sentry-bridge-app}
@@ -18,14 +8,8 @@ services:
       dockerfile: Dockerfile
     env_file: .env
     environment:
-      REDIS_URL: redis://redis:6379
       BRAIN_CMD: "python3 /app/python-brain/apps/consumer.py"
-    depends_on:
-      - redis
     restart: unless-stopped
     volumes:
       # Persist data/ (active_symbols.txt, app.log) on host so you can tail data/app.log
       - ./data:/app/data
-
-volumes:
-  redis_data:

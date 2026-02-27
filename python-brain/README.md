@@ -1,16 +1,15 @@
 # Python brain
 
-Trading brain for Sentry Bridge: reads market events (from Go via stdin or from Redis), runs strategy and rules, and places paper orders on Alpaca.
+Trading brain for Sentry Bridge: reads market events from Go via stdin, runs strategy and rules, and places paper orders on Alpaca.
 
 ## Layout
 
 ```
 python-brain/
 ├── README.md           # This file
-├── requirements.txt    # Dependencies (redis, vaderSentiment, alpaca-py, transformers, torch, …)
+├── requirements.txt    # Dependencies (vaderSentiment, alpaca-py, transformers, torch, …)
 ├── apps/               # Entry points (runnable scripts)
 │   ├── consumer.py     # Stdin consumer — used by Go (BRAIN_CMD). Reads NDJSON, runs strategy, places orders.
-│   ├── redis_consumer.py  # Redis consumer — reads stream market:updates (test pipeline or second consumer).
 │   ├── replay_e2e.py  # E2E test: emits synthetic NDJSON (volatility, trade, news) so you can test without market hours.
 │   ├── backtest.py    # Backtest strategy on Alpaca daily bars (same decide() + prob_gain; optional RSI).
 │   ├── run_screener.py # Stock scanner: daily opportunity pool (Z/volume), output top N to file.
@@ -36,9 +35,6 @@ python-brain/
 ## Running
 
 - **From Go (Docker or local):** Set `BRAIN_CMD="python3 python-brain/apps/consumer.py"` (or `/app/python-brain/apps/consumer.py` inside Docker). Go pipes NDJSON to stdin.
-- **Redis consumer (standalone):** From repo root or `python-brain`:  
-  `REDIS_URL=redis://localhost:6379 python3 python-brain/apps/redis_consumer.py`  
-  (or from inside `python-brain`: `python3 apps/redis_consumer.py`).
 - **Test paper order:** From repo root with `.env` loaded:  
   `cd python-brain && python3 apps/test_paper_order.py`
 

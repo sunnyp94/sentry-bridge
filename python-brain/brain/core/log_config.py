@@ -1,7 +1,7 @@
 """
 Shared logging: stderr + optional log file. LOG_LEVEL from env (default INFO). LOG_FILE for path (default data/app.log).
 Uses RotatingFileHandler so only recent logs are kept; very old data is overwritten (10 MB per file, 5 backups = ~60 MB max).
-Call init() at startup from consumer.main or redis_consumer.main so brain/strategy/executor loggers use it.
+Call init() at startup from consumer.main so brain/strategy/executor loggers use it.
 """
 import logging
 import os

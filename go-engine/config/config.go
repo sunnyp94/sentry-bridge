@@ -1,6 +1,6 @@
 // Package config loads all engine settings from environment variables (.env or shell).
 // Required: APCA_API_KEY_ID, APCA_API_SECRET_KEY, ACTIVE_SYMBOLS_FILE (scanner runs at startup and 7:00 ET with discovery on market days).
-// Optional: data URLs, Redis, BRAIN_CMD, STREAM.
+// Optional: data URLs, BRAIN_CMD, STREAM.
 package config
 
 import (
@@ -31,10 +31,6 @@ func Load() (*Config, error) {
 	if dataFeed != "iex" && dataFeed != "sip" {
 		dataFeed = "sip"
 	}
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		redisURL = os.Getenv("REDIS_ADDR")
-	}
 	tradingBaseURL := os.Getenv("APCA_API_BASE_URL")
 	if tradingBaseURL == "" {
 		tradingBaseURL = "https://paper-api.alpaca.markets"
@@ -51,18 +47,16 @@ func Load() (*Config, error) {
 	}
 	return &Config{
 		APIKeyID:             os.Getenv("APCA_API_KEY_ID"),
-		APISecretKey:         os.Getenv("APCA_API_SECRET_KEY"),
-		DataBaseURL:           baseURL,
-		StreamWSURL:          streamWSURL,
-		TradingBaseURL:        tradingBaseURL,
-		Tickers:               tickers,
-		StreamingMode:         stream,
-		DataFeed:              dataFeed,
-		RedisURL:              redisURL,
-		RedisStream:           envOrDefault("REDIS_STREAM", "market:updates"),
-		BrainCmd:              brainCmd,
-		PositionsIntervalSec:  positionsIntervalSec,
-		MarketCloseET:         envOrDefault("MARKET_CLOSE_ET", "16:00"),
+		APISecretKey:        os.Getenv("APCA_API_SECRET_KEY"),
+		DataBaseURL:         baseURL,
+		StreamWSURL:         streamWSURL,
+		TradingBaseURL:      tradingBaseURL,
+		Tickers:            tickers,
+		StreamingMode:      stream,
+		DataFeed:           dataFeed,
+		BrainCmd:           brainCmd,
+		PositionsIntervalSec: positionsIntervalSec,
+		MarketCloseET:        envOrDefault("MARKET_CLOSE_ET", "16:00"),
 	}, nil
 }
 
@@ -121,7 +115,7 @@ func loadTickers() []string {
 	return syms
 }
 
-// Config holds loaded env: Alpaca keys, data/trading/stream URLs, tickers, Redis, and brain command.
+// Config holds loaded env: Alpaca keys, data/trading/stream URLs, tickers, and brain command.
 type Config struct {
 	APIKeyID             string   // Alpaca API key (data + paper trading)
 	APISecretKey         string   // Alpaca secret
@@ -131,8 +125,6 @@ type Config struct {
 	Tickers              []string // Symbols to stream and send to brain
 	StreamingMode        bool     // true = WebSocket streaming; false = one-shot REST
 	DataFeed             string   // "sip" (default) or "iex" — sip = full US consolidated tape
-	RedisURL             string   // Optional Redis for replay/other consumers
-	RedisStream          string   // Stream name, default market:updates
 	BrainCmd             string   // Command to start Python brain, e.g. python3 python-brain/consumer.py
 	PositionsIntervalSec int      // How often to fetch positions/orders (5–300s); default 15 (production-like)
 	MarketCloseET        string   // "16:00" = 4pm ET; engine exits at this time so entrypoint can sleep until 7am then discovery (set 13:00 for half-days)

@@ -51,7 +51,7 @@ cp .env.example .env
 nano .env
 ```
 
-Set at least: `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `ACTIVE_SYMBOLS_FILE=data/active_symbols.txt`, `OPPORTUNITY_ENGINE_ENABLED=true`, `SCREENER_UNIVERSE=lab_12`. Do **not** set `REDIS_URL` or `BRAIN_CMD`. Save and exit.
+Set at least: `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `ACTIVE_SYMBOLS_FILE=data/active_symbols.txt`, `OPPORTUNITY_ENGINE_ENABLED=true`, `SCREENER_UNIVERSE=lab_12`. Do **not** set `BRAIN_CMD` (compose sets it). Save and exit.
 
 ### 1.4 First run (optional)
 
