@@ -272,9 +272,9 @@ def _try_place_order(
     from brain.executor import place_order, get_account_equity
     price = price_override if price_override is not None and price_override > 0 else _get_price(d.symbol)
     # Position sizing: always 5% of actual account equity from Alpaca (no fallback; skip buy if equity unavailable).
-    # We always fetch fresh equity when sizing a buy so stale _last_equity (e.g. when positions events fail) never causes oversizing.
-    # Cap by existing position (and optimistic) so we never double-buy before positions event arrives; hard cap 6% per symbol.
-    if d.action == "buy":
+    # Skip sizing for any "cover short" buy (exit/close); only size for new long entry (green_light_4pt).
+    _is_cover_buy = d.action == "buy" and (d.reason or "").strip() != "green_light_4pt"
+    if d.action == "buy" and not _is_cover_buy:
         if not price or price <= 0:
             log.error("position_size: no price for %s; skipping buy", d.symbol)
             return False
@@ -291,6 +291,9 @@ def _try_place_order(
             existing_qty = int(existing_qty)
         except (TypeError, ValueError):
             existing_qty = 0
+        if existing_qty < 0:
+            log.warning("position_size: %s is short (qty=%d); skip new long entry", d.symbol, existing_qty)
+            return False
         target_dollar = equity * pct
         existing_value = existing_qty * price
         remaining_dollar = max(0.0, target_dollar - existing_value)
@@ -307,15 +310,18 @@ def _try_place_order(
         d = Decision(d.action, d.symbol, qty, d.reason)
         log.info("position_size equity=%.2f price=%.2f pct=%.0f%% existing_qty=%d -> qty=%d", equity, price, pct * 100, existing_qty, qty)
         # Active generated rules (promoted after 24h out-of-sample): block buy only when rule has data and matches
-        if d.action == "buy":
-            try:
-                from brain.learning.generated_rules import should_block_buy
-                ctx = (snapshot_context or {}).copy()
-                if should_block_buy(ctx):
-                    log.info("skip buy %s (generated_rule)", d.symbol)
-                    return False
-            except Exception as e:
-                log.debug("generated_rules check skipped: %s", e)
+        try:
+            from brain.learning.generated_rules import should_block_buy
+            ctx = (snapshot_context or {}).copy()
+            if should_block_buy(ctx):
+                log.info("skip buy %s (generated_rule)", d.symbol)
+                return False
+        except Exception as e:
+            log.debug("generated_rules check skipped: %s", e)
+    elif _is_cover_buy:
+        if not price or price <= 0:
+            log.error("cover_short: no price for %s; skipping buy", d.symbol)
+            return False
     price_str = f"{price:.2f}" if price is not None and price > 0 else "market"
     log.info("order %s %s qty=%d price=%s reason=%s", d.action.upper(), d.symbol, d.qty, price_str, d.reason or "")
     # Ensure order lines appear in log file: log to root and flush (handles hierarchy/buffering on some setups)
@@ -335,14 +341,23 @@ def _try_place_order(
             from brain.learning.experience_buffer import record_entry, record_exit
             ctx = snapshot_context or {}
             if d.action == "buy" and price and price > 0:
-                record_entry(
-                    d.symbol, price, d.qty, d.reason,
-                    technical_score=ctx.get("technical_score"),
-                    ofi=ctx.get("ofi"),
-                    prob_gain=ctx.get("prob_gain"),
-                    structure_ok=ctx.get("structure_ok"),
-                    regime=ctx.get("regime"),
-                )
+                if (d.reason or "").strip() == "green_light_4pt":
+                    record_entry(
+                        d.symbol, price, d.qty, d.reason,
+                        technical_score=ctx.get("technical_score"),
+                        ofi=ctx.get("ofi"),
+                        prob_gain=ctx.get("prob_gain"),
+                        structure_ok=ctx.get("structure_ok"),
+                        regime=ctx.get("regime"),
+                    )
+                else:
+                    record_exit(
+                        d.symbol, price, d.qty, d.reason,
+                        unrealized_pl_pct=ctx.get("unrealized_pl_pct"),
+                        technical_score=ctx.get("technical_score"),
+                        ofi=ctx.get("ofi"),
+                        regime=ctx.get("regime"),
+                    )
             elif d.action == "sell" and price and price > 0:
                 record_exit(
                     d.symbol, price, d.qty, d.reason,
@@ -351,7 +366,7 @@ def _try_place_order(
                     ofi=ctx.get("ofi"),
                     regime=ctx.get("regime"),
                 )
-                # Reinforcement: record outcome for conviction (setup_type = reason)
+            if (d.action == "sell" or (d.action == "buy" and (d.reason or "").strip() != "green_light_4pt")) and price and price > 0:
                 try:
                     from brain.conviction import record_outcome
                     record_outcome(d.reason or "exit", d.reason, ctx.get("unrealized_pl_pct"))
@@ -359,10 +374,10 @@ def _try_place_order(
                     pass
         except Exception as e:
             log.debug("experience_buffer record skipped: %s", e)
-        # Shadow strategy: record ghost buy/sell for 3 shadow models (A/B testing)
+        # Shadow strategy: record ghost buy/sell for 3 shadow models (long-only; cover buys are not new longs)
         try:
             from brain.shadow_strategy import shadow_on_buy, shadow_on_sell, shadow_update, check_promotion, get_shadow_stats
-            if d.action == "buy" and price and price > 0:
+            if d.action == "buy" and price and price > 0 and (d.reason or "").strip() == "green_light_4pt":
                 shadow_on_buy(d.symbol, price, d.qty)
             elif d.action == "sell" and price and price > 0:
                 shadow_on_sell(d.symbol, price, d.reason)
@@ -373,7 +388,7 @@ def _try_place_order(
 
 
 def _run_scale_out_check() -> None:
-    """Scale-out: sell 25% at 1%, 2%, 3% (let runner ride)."""
+    """Scale-out: long sell 25% at 1%, 2%, 3%; short cover 25% at same levels (let runner ride)."""
     if not getattr(brain_config, "SCALE_OUT_ENABLED", False):
         return
     try:
@@ -389,22 +404,26 @@ def _run_scale_out_check() -> None:
             pos_qty = int(pos_qty)
         except (TypeError, ValueError):
             pos_qty = 0
-        if pos_qty <= 0:
+        if pos_qty == 0:
             continue
         done = _scale_out_done.setdefault(sym, set())
         for level in levels_pct:
             if pl_pct >= level and level not in done:
-                sell_qty = max(1, int(pos_qty * scale_pct))
-                sell_qty = min(sell_qty, pos_qty)
-                d = Decision("sell", sym, sell_qty, f"scale_out_{int(level*100)}pct")
-                log.info("scale_out symbol=%s pl_pct=%.2f%% sell qty=%d", sym, pl_pct * 100, sell_qty)
+                size = max(1, int(abs(pos_qty) * scale_pct))
+                size = min(size, abs(pos_qty))
+                if pos_qty > 0:
+                    d = Decision("sell", sym, size, f"scale_out_{int(level*100)}pct")
+                    log.info("scale_out symbol=%s pl_pct=%.2f%% sell qty=%d", sym, pl_pct * 100, size)
+                else:
+                    d = Decision("buy", sym, size, f"scale_out_{int(level*100)}pct")
+                    log.info("scale_out symbol=%s pl_pct=%.2f%% cover qty=%d", sym, pl_pct * 100, size)
                 _try_place_order(d, skip_cooldown=True, snapshot_context={"unrealized_pl_pct": pl_pct})
                 done.add(level)
                 break
 
 
 def run_stop_loss_check() -> None:
-    """On positions update: sell any position at or below stop (ATR or STOP_LOSS_PCT)."""
+    """On positions update: sell long at/below stop, buy to cover short at/below stop (via decide())."""
     _run_scale_out_check()
     stop_decimal = STOP_LOSS_PCT / 100.0
     for sym, pl_pct in position_unrealized_pl_pct.items():
@@ -415,7 +434,7 @@ def run_stop_loss_check() -> None:
             pos_qty = int(pos_qty)
         except (TypeError, ValueError):
             pos_qty = 0
-        if pos_qty <= 0:
+        if pos_qty == 0:
             continue
         combined = dict(last_payload_by_symbol.get(sym, {}))
         combined.setdefault("return_1m", 0)
@@ -432,10 +451,10 @@ def run_stop_loss_check() -> None:
         entry_ts = position_entry_time.get(sym)
         bars_held_days = max(0, int((time.time() - entry_ts) / 86400)) if entry_ts and entry_ts > 0 else None
         d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=None, peak_unrealized_pl_pct=position_peak_unrealized_pl_pct.get(sym), bars_held=bars_held_days)
-        if d.action == "sell" and d.qty > 0:
+        if d.action in ("sell", "buy") and d.qty > 0:
             if d.reason == "scale_out_50_at_vwap":
                 _scaled_50_at_vwap.add(sym)
-            log.warning("stop_loss symbol=%s pl_pct=%.2f%% sell qty=%d reason=%s", d.symbol, pl_pct * 100, d.qty, d.reason)
+            log.warning("stop_loss symbol=%s pl_pct=%.2f%% %s qty=%d reason=%s", d.symbol, pl_pct * 100, d.action, d.qty, d.reason)
             _try_place_order(d, snapshot_context={"unrealized_pl_pct": pl_pct, "ofi": combined.get("ofi")})
 
 
@@ -482,14 +501,17 @@ def run_portfolio_health_check() -> None:
     if not _is_in_health_check_window():
         return
     for sym, qty in list(positions_qty.items()):
-        if qty <= 0:
+        if qty == 0:
             continue
         pl_pct = position_unrealized_pl_pct.get(sym)
         if pl_pct is None or pl_pct >= 0:
             continue
         size = min(abs(qty), brain_config.STRATEGY_MAX_QTY)
-        d = Decision("sell", sym, size, "portfolio_health_check_loser")
-        log.info("portfolio_health_check symbol=%s pl_pct=%.2f%% close loser (winners keep trailing ATR)", sym, pl_pct * 100)
+        if qty > 0:
+            d = Decision("sell", sym, size, "portfolio_health_check_loser")
+        else:
+            d = Decision("buy", sym, size, "close_short_health_check")
+        log.info("portfolio_health_check symbol=%s pl_pct=%.2f%% close %s (qty=%d)", sym, pl_pct * 100, "short" if qty < 0 else "loser", size)
         _try_place_order(d, skip_cooldown=True)
 
 
@@ -498,14 +520,17 @@ def run_close_losses_before_close() -> None:
     if not _is_in_closing_window():
         return
     for sym, qty in list(positions_qty.items()):
-        if qty <= 0:
+        if qty == 0:
             continue
         pl_pct = position_unrealized_pl_pct.get(sym)
         if pl_pct is None or pl_pct >= 0:
             continue
         size = min(abs(qty), brain_config.STRATEGY_MAX_QTY)
-        d = Decision("sell", sym, size, "close_loss_before_close")
-        log.info("close_loss_before_close symbol=%s pl_pct=%.2f%% qty=%d (overnight carry winners)", sym, pl_pct * 100, d.qty)
+        if qty > 0:
+            d = Decision("sell", sym, size, "close_loss_before_close")
+        else:
+            d = Decision("buy", sym, size, "close_short_before_close")
+        log.info("close_loss_before_close symbol=%s pl_pct=%.2f%% %s qty=%d", sym, pl_pct * 100, "cover short" if qty < 0 else "close loser", d.qty)
         _try_place_order(d, skip_cooldown=True)
 
 
@@ -704,22 +729,23 @@ def handle_event(ev: dict) -> None:
                 qty = 0
             side = (p.get("side") or "long").lower()
             if side == "short":
-                qty = -qty
+                # Always store short as negative (API may send + or - qty)
+                qty = -abs(qty)
             positions_qty[sym] = qty
             plpc = _parse_unrealized_plpc(p.get("unrealized_plpc"))
             if plpc is not None:
                 position_unrealized_pl_pct[sym] = plpc
-                # Track peak so breakeven/trailing can fire (take profit when it makes sense)
-                if qty > 0:
-                    cur_peak = position_peak_unrealized_pl_pct.get(sym, plpc)
-                    position_peak_unrealized_pl_pct[sym] = max(cur_peak, plpc)
-            if qty > 0:
+                # Track peak so breakeven/trailing can fire (long and short)
+                cur_peak = position_peak_unrealized_pl_pct.get(sym, plpc)
+                position_peak_unrealized_pl_pct[sym] = max(cur_peak, plpc)
+            if qty != 0:
                 if sym not in position_entry_time:
                     position_entry_time[sym] = time.time()
                 try:
                     cb = float(p.get("cost_basis") or 0)
-                    if cb > 0:
-                        position_entry_price[sym] = cb / qty
+                    abs_qty = abs(qty)
+                    if cb > 0 and abs_qty > 0:
+                        position_entry_price[sym] = cb / abs_qty
                 except (TypeError, ValueError):
                     pass
                 try:
@@ -728,14 +754,14 @@ def handle_event(ev: dict) -> None:
                         position_current_price[sym] = cp
                 except (TypeError, ValueError):
                     pass
-        # Drop peak/entry_time/scale_out state for symbols no longer held
+        # Drop peak/entry_time/scale_out state only when position is flat (long and short use these while held)
         for sym in list(position_entry_time):
-            if positions_qty.get(sym, 0) <= 0:
+            if positions_qty.get(sym, 0) == 0:
                 position_entry_time.pop(sym, None)
                 position_peak_unrealized_pl_pct.pop(sym, None)
                 _scale_out_done.pop(sym, None)
         for sym in list(_scaled_50_at_vwap):
-            if positions_qty.get(sym, 0) <= 0:
+            if positions_qty.get(sym, 0) == 0:
                 _scaled_50_at_vwap.discard(sym)
         # Long-run: prune symbol-keyed caches to active list + positions so memory stays bounded
         active = _get_active_symbols()

@@ -259,23 +259,23 @@ def close_all_positions(positions: List[Dict[str, Any]], reason: str = "flat_on_
         except (TypeError, ValueError):
             continue
         side = (p.get("side") or "long").lower()
-        if side == "short":
-            qty = -qty
-        sell_qty = abs(qty)
-        if sell_qty <= 0:
+        close_qty = abs(qty)
+        if close_qty <= 0:
             continue
+        # Long: close with SELL. Short: close with BUY (cover).
+        order_side = OrderSide.SELL if side == "long" else OrderSide.BUY
         try:
             req = MarketOrderRequest(
                 symbol=sym,
-                qty=sell_qty,
-                side=OrderSide.SELL,
+                qty=close_qty,
+                side=order_side,
                 time_in_force=TimeInForce.DAY,
             )
             client.submit_order(req)
             placed += 1
-            log.info("flat_on_startup sell %s qty=%d", sym, sell_qty)
+            log.info("flat_on_startup %s %s qty=%d", "sell" if side == "long" else "buy", sym, close_qty)
         except Exception as e:
-            log.warning("flat_on_startup sell %s qty=%d failed: %s", sym, sell_qty, e)
+            log.warning("flat_on_startup %s %s qty=%d failed: %s", "sell" if side == "long" else "buy", sym, close_qty, e)
     if placed:
-        log.info("flat_on_startup: placed %d sell order(s)", placed)
+        log.info("flat_on_startup: placed %d order(s)", placed)
     return placed

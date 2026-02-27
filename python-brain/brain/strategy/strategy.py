@@ -166,14 +166,17 @@ def decide(
         return Decision("hold", symbol, 0, f"session={session}")
 
     have_position = position_qty > 0
+    have_short_position = position_qty < 0
+    exit_qty = min(abs(position_qty), max_qty)
 
+    # ---- Long exits (sell) ----
     # 16:00 Portfolio Health Check: close all losing positions; keep winners with trailing ATR
     if in_health_check_window and have_position and unrealized_pl_pct is not None and unrealized_pl_pct < 0:
-        return Decision("sell", symbol, min(abs(position_qty), max_qty), "portfolio_health_check_loser")
+        return Decision("sell", symbol, exit_qty, "portfolio_health_check_loser")
 
     # Stop loss (initial 2×ATR below entry; strategy already uses ATR when USE_ATR_STOP)
     if have_position and unrealized_pl_pct is not None and unrealized_pl_pct <= -stop_loss_pct:
-        return Decision("sell", symbol, min(abs(position_qty), max_qty), f"stop_loss {unrealized_pl_pct*100:.2f}%")
+        return Decision("sell", symbol, exit_qty, f"stop_loss {unrealized_pl_pct*100:.2f}%")
 
     # Scale out 50% at VWAP (two-stage: lock half at mean reversion; trail the rest)
     take_profit_at_vwap = getattr(config, "TAKE_PROFIT_AT_VWAP", False)
@@ -183,10 +186,10 @@ def decide(
         return Decision("sell", symbol, min(half_qty, max_qty), "scale_out_50_at_vwap")
     # Full take profit at VWAP (when not scaling 50% or already scaled)
     if take_profit_at_vwap and have_position and vwap_distance_pct is not None and vwap_distance_pct >= 0:
-        return Decision("sell", symbol, min(abs(position_qty), max_qty), "take_profit_at_vwap")
+        return Decision("sell", symbol, exit_qty, "take_profit_at_vwap")
     # Take profit (fixed % when enabled)
     if take_profit_pct and have_position and unrealized_pl_pct is not None and unrealized_pl_pct >= take_profit_pct:
-        return Decision("sell", symbol, min(abs(position_qty), max_qty), f"take_profit {unrealized_pl_pct*100:.2f}%")
+        return Decision("sell", symbol, exit_qty, f"take_profit {unrealized_pl_pct*100:.2f}%")
 
     # Trailing ATR above VWAP: once price > VWAP, trail at TRAILING_ATR_MULTIPLE×ATR below peak (let winners run)
     trail_atr_above = getattr(config, "TRAILING_ATR_ABOVE_VWAP", False)
@@ -200,7 +203,7 @@ def decide(
             atr_price = current_price * (atr_stop_pct / 100.0) / atr_mult  # ATR in price terms
             stop_level = peak_price - trail_mult * atr_price
             if current_price <= stop_level:
-                return Decision("sell", symbol, min(abs(position_qty), max_qty), f"trailing_atr_above_vwap pl={unrealized_pl_pct*100:.2f}%" if unrealized_pl_pct is not None else "trailing_atr_above_vwap")
+                return Decision("sell", symbol, exit_qty, f"trailing_atr_above_vwap pl={unrealized_pl_pct*100:.2f}%" if unrealized_pl_pct is not None else "trailing_atr_above_vwap")
 
     # Breakeven at 50% of way to VWAP: once price has reached halfway to VWAP, don't give it back — sell if pl <= 0
     be_halfway = getattr(config, "BREAKEVEN_AT_HALFWAY_TO_VWAP", False)
@@ -210,21 +213,69 @@ def decide(
             denom = vwap_val - entry_price
             progress = (current_price - entry_price) / denom if denom > 0 else 0.0
             if progress >= 0.5 and unrealized_pl_pct is not None and unrealized_pl_pct <= 0:
-                return Decision("sell", symbol, min(abs(position_qty), max_qty), f"breakeven_halfway_to_vwap pl={unrealized_pl_pct*100:.2f}%")
+                return Decision("sell", symbol, exit_qty, f"breakeven_halfway_to_vwap pl={unrealized_pl_pct*100:.2f}%")
 
     # Breakeven: once we've been up X%, don't give it back — sell if we drop to 0 or below
     if breakeven_act and have_position and unrealized_pl_pct is not None and peak_unrealized_pl_pct is not None:
         if peak_unrealized_pl_pct >= breakeven_act and unrealized_pl_pct <= 0:
-            return Decision("sell", symbol, min(abs(position_qty), max_qty), f"breakeven pl={unrealized_pl_pct*100:.2f}%")
+            return Decision("sell", symbol, exit_qty, f"breakeven pl={unrealized_pl_pct*100:.2f}%")
 
     # Trailing stop: once up trail_act, sell if we drop trail_pct from peak
     if trail_act and trail_pct and have_position and unrealized_pl_pct is not None and peak_unrealized_pl_pct is not None:
         if peak_unrealized_pl_pct >= trail_act and unrealized_pl_pct < peak_unrealized_pl_pct - trail_pct:
-            return Decision("sell", symbol, min(abs(position_qty), max_qty), f"trailing_stop pl={unrealized_pl_pct*100:.2f}%")
+            return Decision("sell", symbol, exit_qty, f"trailing_stop pl={unrealized_pl_pct*100:.2f}%")
 
     # Time stop: exit if held too long (avoid dead capital)
     if max_hold_days > 0 and have_position and bars_held is not None and bars_held >= max_hold_days:
-        return Decision("sell", symbol, min(abs(position_qty), max_qty), f"max_hold_days={bars_held}")
+        return Decision("sell", symbol, exit_qty, f"max_hold_days={bars_held}")
+
+    # ---- Short exits (buy to cover) — same logic as long, action = buy ----
+    if in_health_check_window and have_short_position and unrealized_pl_pct is not None and unrealized_pl_pct < 0:
+        return Decision("buy", symbol, exit_qty, "portfolio_health_check_loser")
+
+    if have_short_position and unrealized_pl_pct is not None and unrealized_pl_pct <= -stop_loss_pct:
+        return Decision("buy", symbol, exit_qty, f"stop_loss {unrealized_pl_pct*100:.2f}%")
+
+    # Short: scale out 50% at VWAP (cover half when price at/below VWAP = profit)
+    if take_profit_at_vwap and scale_out_50 and have_short_position and not scaled_50_at_vwap and vwap_distance_pct is not None and vwap_distance_pct <= 0:
+        half_qty = max(1, abs(position_qty) // 2)
+        return Decision("buy", symbol, min(half_qty, max_qty), "scale_out_50_at_vwap")
+    if take_profit_at_vwap and have_short_position and vwap_distance_pct is not None and vwap_distance_pct <= 0:
+        return Decision("buy", symbol, exit_qty, "take_profit_at_vwap")
+    if take_profit_pct and have_short_position and unrealized_pl_pct is not None and unrealized_pl_pct >= take_profit_pct:
+        return Decision("buy", symbol, exit_qty, f"take_profit {unrealized_pl_pct*100:.2f}%")
+
+    # Short: trailing ATR below VWAP — price dropped (profit); trail above trough, cover if price bounces back
+    if trail_atr_above and have_short_position and vwap_distance_pct is not None and vwap_distance_pct <= 0:
+        if entry_price and entry_price > 0 and current_price and current_price > 0 and atr_stop_pct and atr_stop_pct > 0 and peak_unrealized_pl_pct is not None:
+            atr_mult = getattr(config, "ATR_STOP_MULTIPLE", 2.0)
+            if not atr_mult or atr_mult <= 0:
+                atr_mult = 2.0
+            trail_mult = getattr(config, "TRAILING_ATR_MULTIPLE", 1.5)
+            trough_price = entry_price * (1.0 - peak_unrealized_pl_pct)
+            atr_price = current_price * (atr_stop_pct / 100.0) / atr_mult
+            stop_level = trough_price + trail_mult * atr_price
+            if current_price >= stop_level:
+                return Decision("buy", symbol, exit_qty, f"trailing_atr_above_vwap pl={unrealized_pl_pct*100:.2f}%" if unrealized_pl_pct is not None else "trailing_atr_above_vwap")
+
+    if be_halfway and have_short_position and entry_price and entry_price > 0 and current_price and current_price > 0 and vwap_distance_pct is not None:
+        vwap_val = current_price / (1.0 + vwap_distance_pct / 100.0)
+        if vwap_val < entry_price:
+            denom = entry_price - vwap_val
+            progress = (entry_price - current_price) / denom if denom > 0 else 0.0
+            if progress >= 0.5 and unrealized_pl_pct is not None and unrealized_pl_pct <= 0:
+                return Decision("buy", symbol, exit_qty, f"breakeven_halfway_to_vwap pl={unrealized_pl_pct*100:.2f}%")
+
+    if breakeven_act and have_short_position and unrealized_pl_pct is not None and peak_unrealized_pl_pct is not None:
+        if peak_unrealized_pl_pct >= breakeven_act and unrealized_pl_pct <= 0:
+            return Decision("buy", symbol, exit_qty, f"breakeven pl={unrealized_pl_pct*100:.2f}%")
+
+    if trail_act and trail_pct and have_short_position and unrealized_pl_pct is not None and peak_unrealized_pl_pct is not None:
+        if peak_unrealized_pl_pct >= trail_act and unrealized_pl_pct < peak_unrealized_pl_pct - trail_pct:
+            return Decision("buy", symbol, exit_qty, f"trailing_stop pl={unrealized_pl_pct*100:.2f}%")
+
+    if max_hold_days > 0 and have_short_position and bars_held is not None and bars_held >= max_hold_days:
+        return Decision("buy", symbol, exit_qty, f"max_hold_days={bars_held}")
 
     # Buy: kill switch
     if is_kill_switch_active():
@@ -238,8 +289,8 @@ def decide(
     if drawdown_halt:
         return Decision("hold", symbol, 0, "drawdown_halt")
 
-    # Buy: Green Light — 4-point checklist. Liberal: when data missing, allow (don't block).
-    if not have_position:
+    # Buy: Green Light — 4-point checklist (long only; do not open new shorts). Skip when short.
+    if not have_position and not have_short_position:
         # 1) Structure: HTF trend aligned. When unknown (None), allow (liberal).
         _structure_ok = structure_ok if structure_ok is not None else trend_ok
         if _structure_ok is False:
