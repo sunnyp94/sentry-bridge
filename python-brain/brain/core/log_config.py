@@ -1,6 +1,6 @@
 """
 Shared logging: stderr + optional log file. LOG_LEVEL from env (default INFO). LOG_FILE for path (default data/app.log).
-Uses RotatingFileHandler so only recent logs are kept; very old data is overwritten (10 MB per file, 5 backups = ~60 MB max).
+Uses RotatingFileHandler: when file exceeds max size it is overwritten (rotated away, no backups kept).
 Call init() at startup from consumer.main so brain/strategy/executor loggers use it.
 """
 import logging
@@ -9,13 +9,13 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-# Keep last ~60 MB of logs: 10 MB per file, 5 backups; older data is overwritten
+# When app.log exceeds this size it is overwritten (no backup files kept)
 LOG_ROTATE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
-LOG_ROTATE_BACKUP_COUNT = 5
+LOG_ROTATE_BACKUP_COUNT = 0  # overwrite when full; do not keep .1, .2, etc.
 
 
 def init() -> None:
-    """Configure root logger: LOG_LEVEL, format to stderr and to LOG_FILE (default data/app.log) with rotation."""
+    """Configure root logger: LOG_LEVEL, format to stderr and to LOG_FILE (default data/app.log). File overwritten when it exceeds 10 MB."""
     level_name = (os.environ.get("LOG_LEVEL") or "INFO").strip().upper()
     level = getattr(logging, level_name, logging.INFO)
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
