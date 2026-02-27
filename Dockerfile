@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 RUN pip install --no-cache-dir -r /app/python-brain/requirements.txt
 # Validate Python: compile all .py (syntax) and verify brain package imports (fail build on errors)
 RUN python3 -m compileall -q /app/python-brain \
-    && python3 -c "import sys; sys.path.insert(0, '/app/python-brain'); from brain import config; from brain.strategy import decide; from brain.executor import place_order, get_account_equity; print('brain OK')"
+    && python3 -c "import sys; sys.path.insert(0, '/app/python-brain'); from brain import config; from brain.strategy import decide; from brain.executor import place_order, get_account_equity, close_all_positions_from_api, close_all_positions; print('brain OK')"
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 # When ACTIVE_SYMBOLS_FILE is set, entrypoint runs the scanner first, then starts Go (which reads tickers from that file).
