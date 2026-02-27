@@ -5,8 +5,7 @@ Saves a MarketSnapshot for every entry and exit. Snapshots capture indicator sta
 (Z-Score, RSI, MACD, OFI, ATR) and market regime (trend vs range). Trades are labeled
 24h later: Success (hit target), False Positive (pattern failed), Late Entry (price moved before entry).
 
-Retention: Set EXPERIENCE_BUFFER_MAX_LINES (e.g. 100000) to keep only the last N lines so the
-file doesn't grow forever. Learning is preserved: (1) Conviction uses an in-memory rolling window
+Retention: Default 20000 lines (last N kept). When the file exceeds this, we trim by rewriting it with only the last N lines — older lines are removed (not overwritten in place). Override with EXPERIENCE_BUFFER_MAX_LINES env if needed. Learning is preserved: (1) Conviction uses an in-memory rolling window
 (last 100 outcomes per setup), not this file. (2) Strategy optimizer trains on whatever is in the
 buffer; a large window (e.g. 50k–100k lines) still gives plenty of recent trades, and recent data
 is usually more relevant for non-stationary markets. To archive long-term data before trimming,
@@ -23,12 +22,12 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("brain.learning.experience_buffer")
 
-# 0 = no trim; when > 0 we keep only the last N lines (checked every TRIM_CHECK_INTERVAL writes)
+# Default 20000; when file exceeds this we keep only the last N lines (trim = rewrite file, older lines dropped).
 def _max_lines() -> int:
     try:
-        return int(os.environ.get("EXPERIENCE_BUFFER_MAX_LINES", "0").strip())
+        return int(os.environ.get("EXPERIENCE_BUFFER_MAX_LINES", "20000").strip())
     except (TypeError, ValueError):
-        return 0
+        return 20000
 
 
 TRIM_CHECK_INTERVAL = 500  # check trim every N appends
@@ -177,10 +176,10 @@ def record_exit(
 
 
 def _trim_if_needed(path: Path) -> None:
-    """If EXPERIENCE_BUFFER_MAX_LINES is set and file has more lines, keep only the last N lines. Hold _lock for full read+write so no append runs during trim."""
+    """If file has more than _max_lines() (default 20000), rewrite with only the last N lines (older lines dropped). Hold _lock for full read+write so no append runs during trim."""
     global _writes_since_trim
     max_ln = _max_lines()
-    if max_ln <= 0:
+    if max_ln < 1:
         return
     with _lock:
         if _writes_since_trim < TRIM_CHECK_INTERVAL:

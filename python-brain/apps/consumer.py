@@ -194,6 +194,10 @@ positions_qty: dict[str, int] = {}
 position_unrealized_pl_pct: dict[str, float] = {}
 position_entry_price: dict[str, float] = {}
 position_current_price: dict[str, float] = {}
+# Peak unrealized PnL per symbol (so breakeven/trailing can fire without VWAP/ATR from bars)
+position_peak_unrealized_pl_pct: dict[str, float] = {}
+# Entry timestamp per symbol for max_hold_days (seconds since epoch)
+position_entry_time: dict[str, float] = {}
 # Two-stage: track symbols for which we already scaled out 50% at VWAP (runner remains with trailing ATR)
 _scaled_50_at_vwap: set = set()
 # Scale-out: levels (e.g. 0.01, 0.02, 0.03) already hit per symbol
@@ -420,7 +424,9 @@ def run_stop_loss_check() -> None:
             cur_price = float(cur_price) if cur_price is not None else None
         except (TypeError, ValueError):
             cur_price = None
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=None)
+        entry_ts = position_entry_time.get(sym)
+        bars_held_days = max(0, int((time.time() - entry_ts) / 86400)) if entry_ts and entry_ts > 0 else None
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=None, peak_unrealized_pl_pct=position_peak_unrealized_pl_pct.get(sym), bars_held=bars_held_days)
         if d.action == "sell" and d.qty > 0:
             if d.reason == "scale_out_50_at_vwap":
                 _scaled_50_at_vwap.add(sym)
@@ -560,7 +566,9 @@ def run_strategy_for_symbols(symbols: list) -> None:
             cur_price = None
         _structure_ok = _trend_ok(sym)
         _ltf_prices = list(price_history_by_symbol.get(sym, []))
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=tech, structure_ok=_structure_ok, ltf_prices=_ltf_prices)
+        entry_ts = position_entry_time.get(sym)
+        bars_held_days = max(0, int((time.time() - entry_ts) / 86400)) if entry_ts and entry_ts > 0 else None
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=tech, structure_ok=_structure_ok, ltf_prices=_ltf_prices, peak_unrealized_pl_pct=position_peak_unrealized_pl_pct.get(sym), bars_held=bars_held_days)
         if d.reason == "scale_out_50_at_vwap":
             _scaled_50_at_vwap.add(sym)
         log.info(
@@ -582,7 +590,7 @@ def run_strategy_for_symbols(symbols: list) -> None:
                 shadow_update(sym, cur_price)
             except Exception:
                 pass
-    log.info("latency step=strategy_run symbols=%d ms=%.1f", len(symbols), (_PERF() - t0) * 1000)
+    log.debug("latency step=strategy_run symbols=%d ms=%.1f", len(symbols), (_PERF() - t0) * 1000)
 
 
 def _maybe_run_strategy_interval() -> None:
@@ -679,6 +687,7 @@ def handle_event(ev: dict) -> None:
         position_unrealized_pl_pct.clear()
         position_entry_price.clear()
         position_current_price.clear()
+        # Keep position_peak_unrealized_pl_pct and position_entry_time; clean up after we rebuild positions
         for p in payload.get("positions") or []:
             sym = p.get("symbol")
             if not sym:
@@ -695,7 +704,13 @@ def handle_event(ev: dict) -> None:
             plpc = _parse_unrealized_plpc(p.get("unrealized_plpc"))
             if plpc is not None:
                 position_unrealized_pl_pct[sym] = plpc
+                # Track peak so breakeven/trailing can fire (take profit when it makes sense)
+                if qty > 0:
+                    cur_peak = position_peak_unrealized_pl_pct.get(sym, plpc)
+                    position_peak_unrealized_pl_pct[sym] = max(cur_peak, plpc)
             if qty > 0:
+                if sym not in position_entry_time:
+                    position_entry_time[sym] = time.time()
                 try:
                     cb = float(p.get("cost_basis") or 0)
                     if cb > 0:
@@ -708,9 +723,34 @@ def handle_event(ev: dict) -> None:
                         position_current_price[sym] = cp
                 except (TypeError, ValueError):
                     pass
+        # Drop peak/entry_time/scale_out state for symbols no longer held
+        for sym in list(position_entry_time):
+            if positions_qty.get(sym, 0) <= 0:
+                position_entry_time.pop(sym, None)
+                position_peak_unrealized_pl_pct.pop(sym, None)
+                _scale_out_done.pop(sym, None)
         for sym in list(_scaled_50_at_vwap):
             if positions_qty.get(sym, 0) <= 0:
                 _scaled_50_at_vwap.discard(sym)
+        # Long-run: prune symbol-keyed caches to active list + positions so memory stays bounded
+        active = _get_active_symbols()
+        if active is not None:
+            keep = set(positions_qty.keys()) | set(active)
+            for sym in list(last_payload_by_symbol):
+                if sym not in keep:
+                    last_payload_by_symbol.pop(sym, None)
+            for sym in list(session_by_symbol):
+                if sym not in keep:
+                    session_by_symbol.pop(sym, None)
+            for sym in list(sentiment_by_symbol):
+                if sym not in keep:
+                    sentiment_by_symbol.pop(sym, None)
+            for sym in list(price_history_by_symbol):
+                if sym not in keep:
+                    price_history_by_symbol.pop(sym, None)
+            for sym in list(last_order_time_by_symbol):
+                if sym not in keep:
+                    last_order_time_by_symbol.pop(sym, None)
         get_equity_ms = 0.0
         try:
             from brain.executor import get_account_equity
@@ -729,7 +769,7 @@ def handle_event(ev: dict) -> None:
         run_close_losses_before_close()
         run_portfolio_health_check()
         stop_loss_ms = (_PERF() - t1) * 1000
-        log.info("latency step=positions get_equity_ms=%.1f stop_loss_ms=%.1f", get_equity_ms, stop_loss_ms)
+        log.debug("latency step=positions get_equity_ms=%.1f stop_loss_ms=%.1f", get_equity_ms, stop_loss_ms)
     elif typ == "news":
         run_strategy_on_news(payload)
     # Periodic strategy run (Green Light) — not news-only; runs every STRATEGY_INTERVAL_SEC
@@ -949,7 +989,7 @@ def main() -> None:
             log_event(ev)
             t0 = _PERF()
             handle_event(ev)
-            log.info("latency step=event_handle type=%s ms=%.1f", ev.get("type", "?"), (_PERF() - t0) * 1000)
+            log.debug("latency step=event_handle type=%s ms=%.1f", ev.get("type", "?"), (_PERF() - t0) * 1000)
         except json.JSONDecodeError as e:
             log.error("invalid JSON: %s", e)
         except Exception as e:

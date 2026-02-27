@@ -152,11 +152,11 @@ func runStreaming(cfg *config.Config) {
 				if brainPipe != nil {
 					t0 := time.Now()
 					_ = brainPipe.Send("volatility", payload)
-					slog.Info("latency", "step", "brain_send", "type", "volatility", "ms", time.Since(t0).Milliseconds())
+					slog.Debug("latency", "step", "brain_send", "type", "volatility", "ms", time.Since(t0).Milliseconds())
 				}
 				t0 := time.Now()
 				redis.LogErr(pub.PublishJSON(context.Background(), "volatility", payload), "volatility")
-				slog.Info("latency", "step", "redis_publish", "type", "volatility", "ms", time.Since(t0).Milliseconds())
+				slog.Debug("latency", "step", "redis_publish", "type", "volatility", "ms", time.Since(t0).Milliseconds())
 			}
 		}
 		volMu.RLock()
@@ -192,11 +192,11 @@ func runStreaming(cfg *config.Config) {
 		if brainPipe != nil {
 			t0 := time.Now()
 			_ = brainPipe.Send("trade", payload)
-			slog.Info("latency", "step", "brain_send", "type", "trade", "ms", time.Since(t0).Milliseconds())
+			slog.Debug("latency", "step", "brain_send", "type", "trade", "ms", time.Since(t0).Milliseconds())
 		}
 		t0 := time.Now()
 		redis.LogErr(pub.PublishJSON(context.Background(), "trade", payload), "trade")
-		slog.Info("latency", "step", "redis_publish", "type", "trade", "ms", time.Since(t0).Milliseconds())
+		slog.Debug("latency", "step", "redis_publish", "type", "trade", "ms", time.Since(t0).Milliseconds())
 		printMu.Lock()
 		now := time.Now()
 		if now.Sub(lastPrint[symbol]) >= time.Second {
@@ -227,11 +227,11 @@ func runStreaming(cfg *config.Config) {
 		if brainPipe != nil {
 			t0 := time.Now()
 			_ = brainPipe.Send("quote", payload)
-			slog.Info("latency", "step", "brain_send", "type", "quote", "ms", time.Since(t0).Milliseconds())
+			slog.Debug("latency", "step", "brain_send", "type", "quote", "ms", time.Since(t0).Milliseconds())
 		}
 		t0 := time.Now()
 		redis.LogErr(pub.PublishJSON(context.Background(), "quote", payload), "quote")
-		slog.Info("latency", "step", "redis_publish", "type", "quote", "ms", time.Since(t0).Milliseconds())
+		slog.Debug("latency", "step", "redis_publish", "type", "quote", "ms", time.Since(t0).Milliseconds())
 		printMu.Lock()
 		now := time.Now()
 		if now.Sub(lastPrint[symbol]) >= time.Second {
@@ -260,11 +260,11 @@ func runStreaming(cfg *config.Config) {
 		if brainPipe != nil {
 			t0 := time.Now()
 			_ = brainPipe.Send("news", payload)
-			slog.Info("latency", "step", "brain_send", "type", "news", "ms", time.Since(t0).Milliseconds())
+			slog.Debug("latency", "step", "brain_send", "type", "news", "ms", time.Since(t0).Milliseconds())
 		}
 		t0 := time.Now()
 		redis.LogErr(pub.PublishJSON(context.Background(), "news", payload), "news")
-		slog.Info("latency", "step", "redis_publish", "type", "news", "ms", time.Since(t0).Milliseconds())
+		slog.Debug("latency", "step", "redis_publish", "type", "news", "ms", time.Since(t0).Milliseconds())
 		slog.Info("news", "symbols", strings.Join(a.Symbols, ","), "headline", a.Headline, "created_at", a.CreatedAt, "source", a.Source)
 	}
 
@@ -327,7 +327,7 @@ func runStreaming(cfg *config.Config) {
 				slog.Error("trading positions error", "err", err)
 				return
 			}
-			slog.Info("latency", "step", "alpaca_get_positions", "ms", time.Since(t0).Milliseconds())
+			slog.Debug("latency", "step", "alpaca_get_positions", "ms", time.Since(t0).Milliseconds())
 			posPayload := make([]map[string]interface{}, 0, len(positions))
 			for _, p := range positions {
 				posPayload = append(posPayload, map[string]interface{}{
@@ -339,18 +339,18 @@ func runStreaming(cfg *config.Config) {
 			if brainPipe != nil {
 				t0 = time.Now()
 				_ = brainPipe.Send("positions", map[string]interface{}{"positions": posPayload})
-				slog.Info("latency", "step", "brain_send", "type", "positions", "ms", time.Since(t0).Milliseconds())
+				slog.Debug("latency", "step", "brain_send", "type", "positions", "ms", time.Since(t0).Milliseconds())
 			}
 			t0 = time.Now()
 			redis.LogErr(pub.Publish(context.Background(), redis.BrainEvent{Type: "positions", Payload: map[string]interface{}{"positions": posPayload}}), "positions")
-			slog.Info("latency", "step", "redis_publish", "type", "positions", "ms", time.Since(t0).Milliseconds())
+			slog.Debug("latency", "step", "redis_publish", "type", "positions", "ms", time.Since(t0).Milliseconds())
 			t0 = time.Now()
 			orders, err := tradingClient.GetOpenOrders()
 			if err != nil {
 				slog.Error("trading orders error", "err", err)
 				return
 			}
-			slog.Info("latency", "step", "alpaca_get_orders", "ms", time.Since(t0).Milliseconds())
+			slog.Debug("latency", "step", "alpaca_get_orders", "ms", time.Since(t0).Milliseconds())
 			ordPayload := make([]map[string]interface{}, 0, len(orders))
 			for _, o := range orders {
 				ordPayload = append(ordPayload, map[string]interface{}{
@@ -362,11 +362,11 @@ func runStreaming(cfg *config.Config) {
 			if brainPipe != nil {
 				t0 = time.Now()
 				_ = brainPipe.Send("orders", map[string]interface{}{"orders": ordPayload})
-				slog.Info("latency", "step", "brain_send", "type", "orders", "ms", time.Since(t0).Milliseconds())
+				slog.Debug("latency", "step", "brain_send", "type", "orders", "ms", time.Since(t0).Milliseconds())
 			}
 			t0 = time.Now()
 			redis.LogErr(pub.Publish(context.Background(), redis.BrainEvent{Type: "orders", Payload: map[string]interface{}{"orders": ordPayload}}), "orders")
-			slog.Info("latency", "step", "redis_publish", "type", "orders", "ms", time.Since(t0).Milliseconds())
+			slog.Debug("latency", "step", "redis_publish", "type", "orders", "ms", time.Since(t0).Milliseconds())
 		}
 		pushPositionsAndOrders()
 		for {

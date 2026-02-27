@@ -29,7 +29,8 @@ class ShadowPosition:
     shadow_id: int
 
 
-# shadow_id -> list of (symbol, entry_price, qty, exit_price, pnl_pct)
+# shadow_id -> list of (symbol, entry_price, qty, exit_price, pnl_pct). Capped for long runs (e.g. 2 weeks).
+SHADOW_CLOSED_MAX = 1000
 _shadow_closed: Dict[int, list] = {0: [], 1: [], 2: []}
 # shadow_id -> symbol -> ShadowPosition
 _shadow_open: Dict[int, Dict[str, ShadowPosition]] = {0: {}, 1: {}, 2: {}}
@@ -49,7 +50,10 @@ def shadow_on_sell(symbol: str, price: float, exit_reason: str = "") -> None:
         if pos is None:
             continue
         pnl_pct = (price - pos.entry_price) / pos.entry_price if pos.entry_price else 0.0
-        _shadow_closed[i].append((symbol, pos.entry_price, pos.qty, price, pnl_pct))
+        lst = _shadow_closed[i]
+        lst.append((symbol, pos.entry_price, pos.qty, price, pnl_pct))
+        if len(lst) > SHADOW_CLOSED_MAX:
+            lst[:] = lst[-SHADOW_CLOSED_MAX:]
         log.debug("shadow %d exit symbol=%s pnl_pct=%.2f%%", i, symbol, pnl_pct * 100)
 
 
@@ -67,7 +71,10 @@ def shadow_update(symbol: str, current_price: float) -> None:
         pnl_pct = (current_price - pos.entry_price) / pos.entry_price if pos.entry_price else 0.0
         if pnl_pct <= -stop_pct or pnl_pct >= tp_pct:
             _shadow_open[i].pop(symbol, None)
-            _shadow_closed[i].append((symbol, pos.entry_price, pos.qty, current_price, pnl_pct))
+            lst = _shadow_closed[i]
+            lst.append((symbol, pos.entry_price, pos.qty, current_price, pnl_pct))
+            if len(lst) > SHADOW_CLOSED_MAX:
+                lst[:] = lst[-SHADOW_CLOSED_MAX:]
             log.debug("shadow %d ghost exit symbol=%s price=%.2f pnl_pct=%.2f%%", i, symbol, current_price, pnl_pct * 100)
 
 

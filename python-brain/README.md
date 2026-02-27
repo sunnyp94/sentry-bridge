@@ -102,9 +102,16 @@ The brain includes an optional **experience buffer**, **attribution engine**, **
 
 | Component | Role | Config / Script |
 |-----------|------|-----------------|
-| **Experience Buffer** | In **brain/learning/**: saves a `MarketSnapshot` on every entry/exit to `data/experience_buffer.jsonl`. Set `EXPERIENCE_BUFFER_MAX_LINES` (e.g. 100000) to trim. Conviction uses in-memory window; optimizer trains on the buffer. | `EXPERIENCE_BUFFER_ENABLED=true` (default). See **brain/learning/README.md**. |
+| **Experience Buffer** | In **brain/learning/**: saves a `MarketSnapshot` on every entry/exit to `data/experience_buffer.jsonl`. Trimmed by default to last 20,000 lines (older lines dropped when over limit). Conviction uses in-memory window; optimizer trains on the buffer. | `EXPERIENCE_BUFFER_ENABLED=true` (default). See **brain/learning/README.md**. |
 | **Attribution Engine** | Runs Random Forest on the **experience buffer** (see **brain/learning/**). Suggests filter rules when a setup has &lt;40% success under a condition. Run daily after 4pm ET: `./scripts/run_optimizer_after_close.sh` or **docs/OPTIMIZER_DAILY.md**. Active rules are applied via **brain.learning.generated_rules** (`should_block_buy`). | `python3 python-brain/apps/strategy_optimizer.py [--write-proposed] [--rolling-days 7]`. Requires `scikit-learn`. |
 | **Shadow Strategy** | Tracks 3 ghost models (tighter/wide/scalp stop–TP) in parallel with live. No real orders; logs when a shadow outperforms over 30 ghost trades. | `SHADOW_STRATEGY_ENABLED=true` (default). |
 | **Conviction** | Reward +1 for profit, −2 for stop loss. Per-setup conviction scales position size (winning streak → up to 1.5×; losing → down to 0.5×). | `CONVICTION_SIZING_ENABLED=true` (default). |
 
 Install deps first: `python3 -m pip install -r requirements.txt` (from repo root or python-brain).
+
+### Long continuous runs (e.g. 2 weeks without restart)
+
+- **Experience buffer:** The buffer file (`data/experience_buffer.jsonl`) is trimmed by default to the last 20,000 lines (when it exceeds that, the file is rewritten with only the last N lines — older lines are dropped). See **brain/learning/experience_buffer.py**.
+- **Memory:** The consumer prunes symbol-keyed caches (payload, session, sentiment, price history, order cooldown) to the active symbol list + current positions when `OPPORTUNITY_ENGINE_ENABLED=true` and `ACTIVE_SYMBOLS_FILE` is set, so memory stays bounded as the watchlist changes. Shadow strategy keeps only the last 1000 ghost trades per shadow. Scale-out state is cleared when a position is closed.
+- **Logging:** Use `LOG_LEVEL=INFO` (or `WARN`) in production so logs don’t grow too fast; rotate logs externally if needed.
+- **Go state:** The Go engine keeps per-symbol price/volume history trimmed to a 6-minute lookback; the number of symbols is your configured ticker list, so memory is bounded if the watchlist is fixed.

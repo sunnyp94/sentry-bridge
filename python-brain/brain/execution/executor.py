@@ -49,7 +49,7 @@ def get_account_equity() -> Optional[float]:
             t0 = time.perf_counter()
             acc = client.get_account()
             elapsed_ms = (time.perf_counter() - t0) * 1000
-            log.info("latency step=get_account_equity ms=%.1f", elapsed_ms)
+            log.debug("latency step=get_account_equity ms=%.1f", elapsed_ms)
             if acc is None:
                 last_error = "client.get_account() returned None"
                 log.warning("get_account_equity (attempt %d/3): %s", attempt + 1, last_error)
@@ -159,7 +159,7 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
                 limit_price=limit_price,
             )
             order = client.submit_order(req)
-            log.info(
+            log.debug(
                 "latency step=submit_order ms=%.1f LIMIT %s %d %s @ %.2f -> order id=%s",
                 (time.perf_counter() - t0) * 1000, decision.action.upper(), decision.qty, decision.symbol, limit_price, getattr(order, "id", "?"),
             )
@@ -171,7 +171,7 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
                 time_in_force=TimeInForce.DAY,
             )
             order = client.submit_order(req)
-            log.info(
+            log.debug(
                 "latency step=submit_order ms=%.1f %s %d %s -> order id=%s",
                 (time.perf_counter() - t0) * 1000, decision.action.upper(), decision.qty, decision.symbol, getattr(order, "id", "?"),
             )
