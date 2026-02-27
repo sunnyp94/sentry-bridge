@@ -85,14 +85,13 @@ See `brain/signals/microstructure.py` and `.env.example` for details.
 
 ### Recursive Strategy Optimizer
 
-The brain includes an optional **experience buffer**, **attribution engine**, **shadow strategy**, and **conviction sizing** to reduce strategy decay:
+The brain includes an optional **experience buffer**, **attribution engine**, and **shadow strategy** to reduce strategy decay:
 
 | Component | Role | Config / Script |
 |-----------|------|-----------------|
-| **Experience Buffer** | In **brain/learning/**: saves a `MarketSnapshot` on every entry/exit to `data/experience_buffer.jsonl`. Trimmed by default to last 20,000 lines (older lines dropped when over limit). Conviction uses in-memory window; optimizer trains on the buffer. | `EXPERIENCE_BUFFER_ENABLED=true` (default). See **brain/learning/README.md**. |
+| **Experience Buffer** | In **brain/learning/**: saves a `MarketSnapshot` on every entry/exit to `data/experience_buffer.jsonl`. Trimmed by default to last 20,000 lines (older lines dropped when over limit). Optimizer trains on the buffer. | `EXPERIENCE_BUFFER_ENABLED=true` (default). See **brain/learning/README.md**. |
 | **Attribution Engine** | Runs Random Forest on the **experience buffer** (see **brain/learning/**). Suggests filter rules when a setup has &lt;40% success under a condition. Run daily after 4pm ET: `./scripts/run_optimizer_after_close.sh` or **docs/OPTIMIZER_DAILY.md**. Active rules are applied via **brain.learning.generated_rules** (`should_block_buy`). | `python3 python-brain/apps/strategy_optimizer.py [--write-proposed] [--rolling-days 7]`. Requires `scikit-learn`. |
 | **Shadow Strategy** | Tracks 3 ghost models (tighter/wide/scalp stop–TP) in parallel with live. No real orders; logs when a shadow outperforms over 30 ghost trades. | `SHADOW_STRATEGY_ENABLED=true` (default). |
-| **Conviction** | Reward +1 for profit, −2 for stop loss. Per-setup conviction scales position size (winning streak → up to 1.5×; losing → down to 0.5×). | `CONVICTION_SIZING_ENABLED=true` (default). |
 
 Install deps first: `python3 -m pip install -r requirements.txt` (from repo root or python-brain).
 

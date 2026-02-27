@@ -343,12 +343,6 @@ def _try_place_order(
                     ofi=ctx.get("ofi"),
                     regime=ctx.get("regime"),
                 )
-            if (d.action == "sell" or (d.action == "buy" and (d.reason or "").strip() != "green_light_4pt")) and price and price > 0:
-                try:
-                    from brain.conviction import record_outcome
-                    record_outcome(d.reason or "exit", d.reason, ctx.get("unrealized_pl_pct"))
-                except Exception:
-                    pass
         except Exception as e:
             log.debug("experience_buffer record skipped: %s", e)
         # Shadow strategy: record ghost buy/sell for 3 shadow models (long-only; cover buys are not new longs)

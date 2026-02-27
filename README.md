@@ -20,7 +20,7 @@ Sentry Bridge is an **automated trading system** that streams market data from *
 
 - **Composite score** – News sentiment (FinBERT/VADER), momentum (1m/5m returns), optional technicals (RSI, MACD, patterns). Consensus: require N-of-3 sources positive before buy.
 - **Rules** – Daily cap (stop new buys when daily PnL ≥ 0.25%), drawdown guard, kill switch (bad news or sharp drop), stop loss, session (regular-hours-only by default; post-close holds).
-- **Paper trading** – Market day orders on Alpaca paper account; positions/orders refreshed every 15s (configurable via `POSITIONS_INTERVAL_SEC`). Scale-out (sell 25% at 1%/2%/3%) and conviction-based sizing from recent outcomes. Position size: 5% of equity per trade (configurable via `POSITION_SIZE_PCT`).
+- **Paper trading** – Market day orders on Alpaca paper account; positions/orders refreshed every 15s (configurable via `POSITIONS_INTERVAL_SEC`). Scale-out (sell 25% at 1%/2%/3%). Position size: 5% of equity per trade (configurable via `POSITION_SIZE_PCT`).
 
 ### Learning and optimization
 
