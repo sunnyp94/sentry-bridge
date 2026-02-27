@@ -1,48 +1,10 @@
 """
 Pillar 1: Risk-first position sizing.
-Size by fixed risk per trade (0.5-2% of capital) using ATR so that one stop = one risk unit.
-Optional Kelly Criterion to scale risk by win rate and avg win/loss.
+Size by fixed risk per trade (ATR-based) or by position size % of equity.
 """
-from collections import deque
 from typing import Optional
 
 from brain.core import config
-
-# Rolling round-trip PnLs for Kelly (win=True/False, pnl=float)
-_trade_history: deque = deque(maxlen=200)
-
-
-def record_round_trip(pnl: float) -> None:
-    """Call after a round-trip trade closes; pnl is dollar PnL (positive = win)."""
-    _trade_history.append((pnl >= 0, pnl))
-
-
-def get_kelly_fraction() -> Optional[float]:
-    """
-    Kelly Criterion: f* = (p*b - q) / b where p=win rate, q=1-p, b=avg_win/avg_loss.
-    Returns fraction in [0, 1] or None if insufficient data. Caller should cap at KELLY_FRACTION_CAP.
-    """
-    n = getattr(config, "KELLY_LOOKBACK_TRADES", 50)
-    if len(_trade_history) < 10:
-        return None
-    recent = list(_trade_history)[-n:]
-    wins = [pnl for is_win, pnl in recent if is_win and pnl > 0]
-    losses = [abs(pnl) for is_win, pnl in recent if not is_win and pnl < 0]
-    if not wins or not losses:
-        return None
-    w = len(wins) / len(recent)
-    avg_win = sum(wins) / len(wins)
-    avg_loss = sum(losses) / len(losses)
-    if avg_loss <= 0:
-        return None
-    b = avg_win / avg_loss
-    if b <= 0:
-        return None  # avoid division by zero in kelly formula
-    kelly = (w * b - (1 - w)) / b
-    if kelly <= 0:
-        return 0.0
-    cap = getattr(config, "KELLY_FRACTION_CAP", 0.25)
-    return min(1.0, min(kelly, cap))
 
 
 def risk_based_shares(
@@ -51,7 +13,6 @@ def risk_based_shares(
     atr: float,
     atr_stop_multiple: float,
     risk_pct: Optional[float] = None,
-    kelly_scale: bool = False,
     max_qty: int = 2,
 ) -> int:
     """
@@ -62,10 +23,6 @@ def risk_based_shares(
         return 1
     if equity <= 0 or price <= 0 or atr <= 0:
         return 1
-    if kelly_scale and getattr(config, "KELLY_SIZING_ENABLED", False):
-        kf = get_kelly_fraction()
-        if kf is not None and kf > 0:
-            risk_pct = risk_pct * kf
     risk_amount = equity * (risk_pct / 100.0)
     stop_per_share = atr * atr_stop_multiple
     if stop_per_share <= 0:
@@ -93,7 +50,6 @@ def position_size_shares(
             atr,
             atr_stop_multiple,
             risk_pct=risk_pct,
-            kelly_scale=True,
             max_qty=max_qty,
         )
     pct = getattr(config, "POSITION_SIZE_PCT", 0.05)

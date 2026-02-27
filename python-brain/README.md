@@ -11,7 +11,6 @@ python-brain/
 ├── apps/               # Entry points (runnable scripts)
 │   ├── consumer.py     # Stdin consumer — used by Go (BRAIN_CMD). Reads NDJSON, runs strategy, places orders.
 │   ├── replay_e2e.py  # E2E test: emits synthetic NDJSON (volatility, trade, news) so you can test without market hours.
-│   ├── backtest.py    # Backtest strategy on Alpaca daily bars (same decide() + prob_gain; optional RSI).
 │   ├── run_screener.py # Stock scanner: daily opportunity pool (Z/volume), output top N to file.
 │   └── test_paper_order.py # One-off test: submit 1 paper BUY to verify Alpaca API.
 └── brain/              # Library package (do not run directly)
@@ -45,12 +44,6 @@ python-brain/
   ```
   You should see event logs, composite/strategy output, and optionally a paper order if `TRADE_PAPER=true` and Alpaca keys are set. To only test the pipeline without placing orders, set `TRADE_PAPER=false` or omit Alpaca keys.
 
-- **Backtest:** Run the strategy on historical daily bars (Alpaca). No news (sentiment=0); uses momentum + optional RSI when `USE_TECHNICAL_INDICATORS=true`.
-  ```bash
-  set -a && source .env && set +a
-  python3 python-brain/apps/backtest.py --symbols AAPL,MSFT --days 90
-  ```
-
 - **Stock scanner (daily opportunity pool):** Don’t hard-code a static list—screen the universe each day and activate only the top 3–5 names. Run every morning (e.g. discovery 7:00–9:30 ET); writes active symbols to a file the consumer reads.
   - **Universe:** Start with `lab_12`, `sp400`, `nasdaq100`, or `file:path/to/symbols.txt`. Scanner runs at container start and 7:00 ET (discovery) on full market days.
   - **Criteria:** |Z-score| > 2.0 (extreme move), or 15% volume spike vs 20-day average; optional OFI skew when available.
@@ -75,8 +68,6 @@ python-brain/
   python3 apps/run_screener.py --universe sp400 --top 10 --out data/active_symbols.txt
   ```
 
-- **Global filter (SPY 200-day MA):** When SPY is below its 200-day moving average, the bot is more cautious on longs (stricter Z-score for entry, smaller position size) and will be more aggressive on short Z-score signals when shorts are added. Enable with `SPY_200MA_REGIME_ENABLED=true`; tune `SPY_BELOW_200MA_Z_TIGHTEN` (e.g. -2.8) and `SPY_BELOW_200MA_LONG_SIZE_MULTIPLIER` (e.g. 0.5). Live consumer refreshes SPY regime every 15 minutes.
-
 - **Technical (RSI + MACD + 3 patterns):** The technical layer is only RSI, MACD, and three chart patterns: **double top** (bearish), **inverted head and shoulders** (bullish), **bull/bear flag** (directional). No other indicators. Set `USE_TECHNICAL_INDICATORS=true`; optional `USE_MACD`, `USE_PATTERNS`, `MACD_FAST/SLOW/SIGNAL`, `PATTERN_LOOKBACK`. Price history from trade/quote or daily bars.
 
 ### Market microstructure (pro-style)
@@ -88,7 +79,7 @@ The strategy can use four professional layers so execution is driven by how pric
 | **VWAP** | Institutional magnet / fair value. Extended above VWAP → wait for mean reversion before entering. | `USE_VWAP_ANCHOR`, `VWAP_MEAN_REVERSION_PCT`, `VWAP_LOOKBACK` |
 | **ATR** | Volatility-adjusted stops (no fixed %). Stop widens when choppy, tightens when calm. | `USE_ATR_STOP`, `ATR_PERIOD`, `ATR_STOP_MULTIPLE` |
 | **Z-Score** | Quantify “weirdness”: Z ≤ -2 or -3 = statistical oversold, bias toward mean-reversion buy. | `USE_ZSCORE_MEAN_REVERSION`, `ZSCORE_MEAN_REVERSION_BUY`, `ZSCORE_PERIOD` |
-| **OFI** | Order flow imbalance (leading signal). Built from Alpaca trade/quote: aggressor inferred from trade price vs bid/ask; rolling window per symbol. | `USE_OFI`, `OFI_WINDOW_TRADES` (live only; backtest uses daily bars, no tape) |
+| **OFI** | Order flow imbalance (leading signal). Built from Alpaca trade/quote: aggressor inferred from trade price vs bid/ask; rolling window per symbol. | `USE_OFI`, `OFI_WINDOW_TRADES` |
 
 See `brain/signals/microstructure.py` and `.env.example` for details.
 

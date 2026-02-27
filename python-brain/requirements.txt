@@ -6,7 +6,7 @@ transformers>=4.30.0
 torch>=2.0.0
 sentencepiece>=0.1.99
 accelerate>=0.20.0
-# Technical indicators (RSI, etc.) and backtesting
+# Technical indicators (RSI, etc.)
 pandas>=2.0.0
 finta>=1.3
 scikit-learn>=1.3.0

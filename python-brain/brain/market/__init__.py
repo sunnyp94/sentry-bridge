@@ -1,4 +1,4 @@
-"""Market: data fetching, calendar, regime. Used by discovery, screener, backtest."""
+"""Market: data fetching, calendar, regime. Used by discovery, screener."""
 from . import data
 from . import market_calendar
 from . import regime

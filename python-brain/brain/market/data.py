@@ -1,20 +1,16 @@
 """
-Shared data fetching (Alpaca bars, assets). Used by backtest and screener.
+Shared data fetching (Alpaca bars, assets). Used by screener and consumer.
 """
 import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 
 _log = logging.getLogger(__name__)
-
-# SPY symbol for global 200-day MA regime
-SPY_SYMBOL = "SPY"
-SPY_200MA_LOOKBACK = 210
 
 
 def get_tradeable_symbols_from_alpaca(limit: Optional[int] = None) -> List[str]:
@@ -208,25 +204,3 @@ def get_bars_chunked(
                     _log.warning("get_bars_chunked: chunk failed: %s", e)
     _log.info("get_bars_chunked: got bars for %d symbols", len(out))
     return out
-
-
-def get_spy_200ma_regime(lookback_days: int = SPY_200MA_LOOKBACK) -> Dict[str, Any]:
-    """
-    Fetch SPY daily bars and compute whether current close is above or below 200-day SMA.
-    Used for global filter: when SPY < 200 MA, bot is more cautious on longs and (when shorts exist) more aggressive on shorts.
-    Returns dict: above_200ma (bool), close (float), sma200 (float). On error returns above_200ma=True (permissive).
-    """
-    bars = get_bars([SPY_SYMBOL], lookback_days)
-    if not bars or SPY_SYMBOL not in bars:
-        return {"above_200ma": True, "close": 0.0, "sma200": 0.0}
-    df = bars[SPY_SYMBOL].sort_index()
-    if "close" not in df.columns and "c" in df.columns:
-        df["close"] = df["c"]
-    if "close" not in df.columns or len(df) < 200:
-        return {"above_200ma": True, "close": 0.0, "sma200": 0.0}
-    closes = df["close"].astype(float)
-    sma200 = closes.rolling(200, min_periods=200).mean()
-    last_close = float(closes.iloc[-1])
-    last_sma = float(sma200.iloc[-1])
-    above = last_sma > 0 and last_close >= last_sma
-    return {"above_200ma": above, "close": last_close, "sma200": last_sma}

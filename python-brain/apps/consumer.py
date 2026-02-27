@@ -54,12 +54,6 @@ _active_symbols_cache: Optional[set] = None
 _active_symbols_path: Optional[str] = None
 _active_symbols_mtime: Optional[float] = None
 
-# Global filter: SPY 200-day MA (cached, refresh every 15 min)
-_spy_below_200ma: Optional[bool] = None
-_spy_regime_updated: float = 0.0
-SPY_REGIME_REFRESH_SEC = 900
-
-
 def _get_active_symbols() -> Optional[set]:
     """When OPPORTUNITY_ENGINE_ENABLED, return set of symbols to activate (from ACTIVE_SYMBOLS_FILE). None = no filter."""
     global _active_symbols_cache, _active_symbols_path, _active_symbols_mtime
@@ -94,23 +88,6 @@ def _get_ofi_tracker():
         from brain.signals.microstructure import OFITracker
         _ofi_tracker = OFITracker(window_trades=getattr(brain_config, "OFI_WINDOW_TRADES", 100))
     return _ofi_tracker
-
-
-def _get_spy_below_200ma() -> Optional[bool]:
-    """When SPY_200MA_REGIME_ENABLED, return True if SPY is below its 200-day MA (risk-off). Cached, refresh every 15 min."""
-    if not getattr(brain_config, "SPY_200MA_REGIME_ENABLED", False):
-        return None
-    global _spy_below_200ma, _spy_regime_updated
-    now = time.time()
-    if _spy_below_200ma is None or (now - _spy_regime_updated) > SPY_REGIME_REFRESH_SEC:
-        try:
-            from brain.data import get_spy_200ma_regime
-            r = get_spy_200ma_regime()
-            _spy_below_200ma = not r.get("above_200ma", True)
-            _spy_regime_updated = now
-        except Exception:
-            _spy_below_200ma = False
-    return _spy_below_200ma
 
 
 log = logging.getLogger("brain")
@@ -450,7 +427,7 @@ def run_stop_loss_check() -> None:
             cur_price = None
         entry_ts = position_entry_time.get(sym)
         bars_held_days = max(0, int((time.time() - entry_ts) / 86400)) if entry_ts and entry_ts > 0 else None
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=None, peak_unrealized_pl_pct=position_peak_unrealized_pl_pct.get(sym), bars_held=bars_held_days)
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=None, peak_unrealized_pl_pct=position_peak_unrealized_pl_pct.get(sym), bars_held=bars_held_days)
         if d.action in ("sell", "buy") and d.qty > 0:
             if d.reason == "scale_out_50_at_vwap":
                 _scaled_50_at_vwap.add(sym)
@@ -598,7 +575,7 @@ def run_strategy_for_symbols(symbols: list) -> None:
         _ltf_prices = list(price_history_by_symbol.get(sym, []))
         entry_ts = position_entry_time.get(sym)
         bars_held_days = max(0, int((time.time() - entry_ts) / 86400)) if entry_ts and entry_ts > 0 else None
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, spy_below_200ma=_get_spy_below_200ma(), scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=tech, structure_ok=_structure_ok, ltf_prices=_ltf_prices, peak_unrealized_pl_pct=position_peak_unrealized_pl_pct.get(sym), bars_held=bars_held_days)
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=tech, structure_ok=_structure_ok, ltf_prices=_ltf_prices, peak_unrealized_pl_pct=position_peak_unrealized_pl_pct.get(sym), bars_held=bars_held_days)
         if d.reason == "scale_out_50_at_vwap":
             _scaled_50_at_vwap.add(sym)
         log.info(
@@ -931,13 +908,15 @@ def _scheduler_loop() -> None:
 
 
 def _optimizer_scheduler_loop() -> None:
-    """Background loop: at OPTIMIZER_RUN_AT_ET (e.g. 16:05 = 4:05pm ET) on full trading days, run the strategy optimizer."""
-    run_at = getattr(brain_config, "OPTIMIZER_RUN_AT_ET", "").strip()
+    """Background loop: after market close (default 16:05 ET) on full trading days, run the strategy optimizer. Always on."""
+    run_at = getattr(brain_config, "OPTIMIZER_RUN_AT_ET", "16:05").strip() or "16:05"
     parsed = _parse_run_at_et(run_at)
-    if not parsed or not ZoneInfo:
-        if run_at:
-            log.warning("optimizer scheduler disabled: OPTIMIZER_RUN_AT_ET=%r or no zoneinfo", run_at)
+    if not ZoneInfo:
+        log.warning("optimizer scheduler disabled: no zoneinfo")
         return
+    if not parsed:
+        parsed = (16, 5)
+        log.info("optimizer scheduler using default 16:05 ET")
     hour, minute = parsed
     et = ZoneInfo("America/New_York")
     log.info("optimizer scheduler started; will run at %02d:%02d ET on full trading days", hour, minute)
@@ -999,9 +978,8 @@ def main() -> None:
         active = _get_active_symbols()
         log.info("opportunity_engine enabled; active_symbols from %s: %s", path or "(no file)", list(active)[:20] if active else [])
 
-    # Strategy optimizer: run at OPTIMIZER_RUN_AT_ET (default 16:05 = 4:05pm ET) on full trading days.
-    optimizer_run_at = getattr(brain_config, "OPTIMIZER_RUN_AT_ET", "").strip()
-    if optimizer_run_at and _parse_run_at_et(optimizer_run_at) and ZoneInfo:
+    # Strategy optimizer: always run once per day after market close (16:05 ET unless overridden in config).
+    if ZoneInfo:
         threading.Thread(target=_optimizer_scheduler_loop, daemon=True).start()
 
     log.info("reading from stdin (NDJSON)")

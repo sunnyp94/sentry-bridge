@@ -132,7 +132,6 @@ def decide(
     atr_percentile: Optional[float] = None,
     entry_price: Optional[float] = None,
     current_price: Optional[float] = None,
-    spy_below_200ma: Optional[bool] = None,
     scaled_50_at_vwap: bool = False,
     in_health_check_window: bool = False,
     technical_score: Optional[float] = None,

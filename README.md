@@ -1,6 +1,6 @@
 # Sentry Bridge
 
-Sentry Bridge is an **automated trading system** that streams market data from **Alpaca**, runs a **Python strategy brain** (signals, rules, paper or live orders), and supports **pre-market discovery**, **backtesting**, and **one-command deployment** on **Google Cloud (GCP)**. It is built for **Alpaca paper trading** by default; you can switch to live keys when ready.
+Sentry Bridge is an **automated trading system** that streams market data from **Alpaca**, runs a **Python strategy brain** (signals, rules, paper or live orders), and supports **pre-market discovery** and **one-command deployment** on **Google Cloud (GCP)**. It is built for **Alpaca paper trading** by default; you can switch to live keys when ready.
 
 ## Features
 
