@@ -31,8 +31,7 @@ Sentry Bridge is an **automated trading system** that streams market data from *
 
 ### Deployment (GCP)
 
-- **Single Docker stack** – Go engine + **Redis** + Python brain in one `docker compose` setup.
-- **Redis** – Runs **locally in the same Docker Compose** on the GCP VM for **low latency** (no external Redis required for production).
+- **Single Docker stack** – Go engine + Python brain in one `docker compose` setup.
 - **GCP VM** – One-command startup: install Docker, clone repo, configure `.env`, run `docker compose up -d --build`. Containers use `restart: unless-stopped`.
 - **GitHub Actions** – **Merge/push to main:** builds the image and pushes to ghcr.io only (no deploy). **Manual trigger:** builds and deploys to the VM (Actions → Deploy to GCP VM → Run workflow).
 
@@ -250,7 +249,7 @@ Press **Ctrl+C** to stop. Streams reconnect automatically if the connection drop
 
 ### Brain (closest to data)
 
-Set **`BRAIN_CMD`** to pipe events directly to your Python brain process via **stdin** (no Redis in the hot path). The Go engine starts the process and writes one NDJSON event per line. Example:
+Set **`BRAIN_CMD`** to pipe events directly to your Python brain process via **stdin**. The Go engine starts the process and writes one NDJSON event per line. Example:
 
 ```bash
 # .env
