@@ -87,7 +87,7 @@ This creates `deploy_key` (private) and `deploy_key.pub` (public).
 
 ### 2.2 Add public key to the VM
 
-Use the **same user** that runs Docker (e.g. `sunnyakpatel` or `sunnypatel`). Choose one:
+Use the **same user** that runs Docker (e.g. `sunnyakpatel`). Choose one:
 
 **Option A – GCP Console (recommended; key persists across reboots):**
 
