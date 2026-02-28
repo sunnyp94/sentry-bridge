@@ -18,16 +18,16 @@ Sentry Bridge is an **automated trading system** that streams market data from *
 
 ### Strategy brain (Python)
 
-- **Composite score** – News sentiment (FinBERT/VADER), momentum (1m/5m returns), optional technicals (RSI, MACD, patterns). Consensus: require N-of-3 sources positive before buy.
-- **Rules** – Daily cap (stop new buys when daily PnL ≥ 0.25%), drawdown guard, kill switch (bad news or sharp drop), stop loss, session (regular-hours-only by default; post-close holds).
-- **Paper trading** – Market day orders on Alpaca paper account; positions/orders refreshed every 15s (configurable via `POSITIONS_INTERVAL_SEC`). Scale-out (sell 25% at 1%/2%/3%). Position size: 5% of equity per trade (configurable via `POSITION_SIZE_PCT`).
+- **Green Light entry** – Buy only when a 4-point checklist passes: (1) structure/trend, (2) pattern at confluence (technical score, Z/VWAP), (3) momentum (or scalp skip), (4) OFI. Plus `prob_gain` above threshold. News sentiment is used only for the kill switch, not for entry.
+- **Exits** – Stop loss (fixed % or ATR-based), take profit at VWAP, optional scale-out 50% at VWAP then trail the rest, breakeven at halfway to VWAP, trailing stop, max hold days, portfolio health check (e.g. close losers before close). Supports **longs and shorts** (shorts: cover = buy).
+- **Rules** – Daily cap (stop new buys when daily PnL hits target/soft cap), drawdown halt, kill switch (bad news or sharp return drop), session (regular-hours-only by default).
+- **Paper/live trading** – Market or limit day orders on Alpaca (paper by default; live with `TRADE_PAPER=false` and live keys). Positions/orders refreshed every 15s (`POSITIONS_INTERVAL_SEC`). Scale-out: 25% at 1%/2%/3% profit (consumer) and optional 50% at VWAP (strategy). Position size: 5% of equity per trade (`POSITION_SIZE_PCT`).
 
 ### Learning and optimization
 
 - **Experience buffer** – Saves a market snapshot on every entry and exit to `data/experience_buffer.jsonl` for later analysis.
-- **Strategy optimizer** – RF/XGBoost on the buffer; suggests filter rules and thresholds.
+- **Strategy optimizer** – RF/XGBoost on the buffer; suggests filter rules and thresholds; proposed rules promoted to active after 24h out-of-sample.
 - **Shadow strategy** – Three ghost models (tighter/wide/scalp) for A/B-style comparison; promotion logic to promote a shadow to primary.
-- **Conviction** – Position size scales with recent win/loss by setup type.
 
 ### Deployment (GCP)
 
@@ -63,7 +63,7 @@ Sentry Bridge is an **automated trading system** that streams market data from *
    - **Tickers:** Come from the scanner. Set `ACTIVE_SYMBOLS_FILE`, `OPPORTUNITY_ENGINE_ENABLED=true`, and `SCREENER_UNIVERSE` (e.g. `lab_12`, `sp400`, `nasdaq100`). With discovery enabled, the scanner runs 7:00–9:30 ET on full market days; otherwise it runs once at container start.  
    - `ALPACA_DATA_BASE_URL` – REST data API (default `https://data.alpaca.markets`)  
    - `STREAM` – set to `false` or `0` for one-shot REST only; default is streaming mode  
-   - `APCA_API_BASE_URL` – Alpaca Trading API for positions/orders (default `https://paper-api.alpaca.markets`)
+   - Paper vs live: use **paper** keys and leave `TRADE_PAPER=true` for sandbox. For live, use **live** API keys and set `TRADE_PAPER=false` (the SDK uses the correct trading endpoint from the `paper` flag).
 
 ## How to run
 
@@ -263,15 +263,15 @@ cd /path/to/sentry-bridge
 set -a && source .env && set +a && cd go-engine && go run .
 ```
 
-The Python brain (`python-brain/apps/consumer.py`) reads stdin, logs events, and runs an **AI-driven strategy** on each news item: sentiment (VADER, or optional FinBERT) + probability of gain from returns/volatility → **buy / sell / hold**. When paper trading is enabled, it **places market orders** on Alpaca (paper account) for the tickers from the scanner (ACTIVE_SYMBOLS_FILE).
+The Python brain (`python-brain/apps/consumer.py`) reads stdin, logs events, and runs the **Green Light strategy** on tape data (trades/quotes) and optionally on news (kill switch only). **Entry:** 4-point checklist (structure, pattern, momentum, OFI) + `prob_gain`; **exits:** stop loss, take profit at VWAP, scale-out 50% at VWAP, trailing ATR, breakeven, trailing stop, max hold days, portfolio health check. Longs and shorts supported. When paper trading is enabled, it places **market or limit** orders on Alpaca (paper or live per `TRADE_PAPER` and API keys) for tickers from the scanner (ACTIVE_SYMBOLS_FILE).
 
 ### Paper trading (AI buy/sell)
 
 The brain decides when to buy or sell using:
 
-- **Sentiment:** [FinBERT](https://huggingface.co/ProsusAI/finbert) (finance-trained transformer) on news headline + summary; falls back to VADER if unavailable. Install deps with `python3 -m pip install -r python-brain/requirements.txt`.
-- **Probability of gain:** Heuristic from `return_1m`, `return_5m`, and `annualized_vol_30d` (from the stream).
-- **Rules:** Buy when sentiment and prob_gain are above thresholds and you have no position; sell when sentiment is bearish or prob_gain drops and you have a position. Trades only during **regular session** unless you set `STRATEGY_REGULAR_SESSION_ONLY=false`. One order per symbol per 30s (cooldown; `ORDER_COOLDOWN_SEC`).
+- **Entry (long only):** Green Light 4-point checklist (structure/trend, pattern at confluence, momentum, OFI) and `prob_gain >= PROB_GAIN_THRESHOLD`. [FinBERT](https://huggingface.co/ProsusAI/finbert) / VADER on news is used only for the **kill switch** (block new buys on bad news), not for entry. Install deps with `python3 -m pip install -r python-brain/requirements.txt`.
+- **Exits:** Stop loss (fixed % or ATR), take profit at VWAP, scale-out 25% at 1%/2%/3% (consumer) and optional 50% at VWAP (strategy), trailing ATR above VWAP, breakeven at halfway to VWAP, breakeven/trailing stop, max hold days, portfolio health check (e.g. close losers before market close). **Shorts:** same logic with cover = buy.
+- **Rules:** Daily cap (stop new buys when daily PnL hits target), drawdown halt, kill switch (bad news or sharp return), regular session only by default. One order per symbol per 30s (cooldown; `ORDER_COOLDOWN_SEC`).
 
 **Enable paper trading:**
 
@@ -293,40 +293,31 @@ The brain decides when to buy or sell using:
 
 3. **Optional tuning** (defaults from `brain/config.py`; override in `.env` as needed):
    ```bash
-   SENTIMENT_BUY_THRESHOLD=0.10    # reserved for plug-in; Green Light uses PROB_GAIN_THRESHOLD
-   SENTIMENT_SELL_THRESHOLD=-0.32  # reserved for plug-in
-   PROB_GAIN_THRESHOLD=0.12        # buy when prob_gain >= this (scalp default)
+   PROB_GAIN_THRESHOLD=0.12        # buy when prob_gain >= this (Green Light)
    STRATEGY_MAX_QTY=12            # max shares per order (default)
    STRATEGY_REGULAR_SESSION_ONLY=true
-   # Composite: require 2 of 3 sources (news, social, momentum) positive to buy; avoid single sensational headline
-   USE_CONSENSUS=true
-   CONSENSUS_MIN_SOURCES_POSITIVE=2
-   CONSENSUS_POSITIVE_THRESHOLD=0.15
-   # 0.25% daily shutdown: no new buys when daily PnL >= 0.25% (lock in gains)
    DAILY_CAP_ENABLED=true
-   DAILY_CAP_PCT=0.25
-   # Kill switch: blocks all new buys when triggered (sticky until restart)
+   DAILY_CAP_PCT=0.5              # daily profit target / soft cap (default 0.5%)
    KILL_SWITCH=false              # set true to disable buys manually
    KILL_SWITCH_SENTIMENT_THRESHOLD=-0.50   # bad news: trigger if headline+summary sentiment <= this
    KILL_SWITCH_RETURN_THRESHOLD=-0.05      # market tanks: trigger if return_1m or return_5m <= -5%
-   # 1% stop loss on positions (sell when unrealized P&amp;L <= -1%)
-   STOP_LOSS_PCT=1.0
+   STOP_LOSS_PCT=1.0              # 1% stop loss (or use ATR-based with USE_ATR_STOP=true)
+   USE_LIMIT_ORDERS=true           # limit orders when price available (default)
    ```
 
-   **Kill switch:** When triggered (bad news, sharp negative return, or `KILL_SWITCH=true`), **no new buy** signals are issued; sells (including stop loss) still execute. Triggered automatically when news sentiment ≤ `KILL_SWITCH_SENTIMENT_THRESHOLD` or when 1m/5m return ≤ `KILL_SWITCH_RETURN_THRESHOLD`.
+   **Kill switch:** When triggered (bad news, sharp negative return, or `KILL_SWITCH=true`), **no new buy** signals are issued; exits (stop loss, TP, etc.) still execute. Triggered when news sentiment ≤ `KILL_SWITCH_SENTIMENT_THRESHOLD` or when 1m/5m return ≤ `KILL_SWITCH_RETURN_THRESHOLD`.
 
-   **Stop loss:** Every positions update (every 15s by default from Alpaca), any position with unrealized PnL ≤ `-STOP_LOSS_PCT`% is sold (market order). Default 1%.
+   **Stop loss:** Every positions update (every 15s by default from Alpaca), any position with unrealized PnL ≤ `-STOP_LOSS_PCT`% is closed (market or limit order). Default 1%. ATR-based stops available with `USE_ATR_STOP=true`.
 
 4. **Run** (from project root):
    ```bash
    set -a && source .env && set +a && cd go-engine && go run .
    ```
 
-You should see strategy logs with `sources=... consensus_ok=... -> action=...` and `[executor] BUY 1 AAPL -> order id=...` when the strategy triggers. Orders are **market, day** on your Alpaca **paper** account. Set `TRADE_PAPER=false` to log decisions only and not place orders.
+You should see strategy logs with `action=... qty=... reason=...` and `[executor] BUY/SELL ... -> order id=...` when the strategy triggers. Orders are **market or limit, day** on your Alpaca **paper** account (or live if `TRADE_PAPER=false` and live keys). Set `TRADE_PAPER=false` to log decisions only and not place orders.
 
-**Composite score (3 sources):** By default the bot uses **News** (FinBERT) + **Social** (placeholder) + **Momentum** (returns). It only buys when at least **2 of 3** sources are "positive" (`CONSENSUS_MIN_SOURCES_POSITIVE=2`), so a single sensational headline doesn’t drive trades. If News is positive but Social is "meh," the bot stays cash. Set `USE_CONSENSUS=false` to use a single news score as before.
+**Daily cap:** When daily PnL reaches the target/soft cap (`DAILY_CAP_PCT`, default **0.5%**), the bot stops **new buys** for the day (exits still allowed). Set `DAILY_CAP_ENABLED=false` to disable.
 
-**0.25% daily shutdown:** When daily PnL ≥ `DAILY_CAP_PCT` (default **0.25%**), the bot stops **new buys** for the day (sells still allowed). Set `DAILY_CAP_ENABLED=false` to disable.
 
 ### Python brain: modular design
 
@@ -334,15 +325,15 @@ The Python brain is split so you can add or change business rules without rewrit
 
 | Layer | Role |
 |-------|------|
-| **config.py** | All thresholds and flags from env (e.g. `CONSENSUS_MIN_SOURCES_POSITIVE`, `DAILY_CAP_PCT`). |
-| **signals/** | **news_sentiment** = FinBERT/VADER on news. **composite** = News + Social (placeholder) + Momentum and consensus. |
-| **rules/** | **consensus** = allow buy only when enough sources positive. **daily_cap** = block new buys when daily PnL ≥ 0.25%. |
-| **strategy.py** | Orchestrates: applies rules (kill switch, daily cap, session, consensus, stop loss) and returns buy/sell/hold. |
-| **apps/consumer.py** | Stdin entry: reads events, updates state, calls composite + strategy + executor. |
+| **config.py** | All thresholds and flags from env (e.g. `PROB_GAIN_THRESHOLD`, `DAILY_CAP_PCT`, `STOP_LOSS_PCT`). |
+| **signals/** | **news_sentiment** = FinBERT/VADER on news (kill switch). **technical** = RSI, MACD, patterns for Green Light. **microstructure** = VWAP, ATR, OFI. |
+| **rules/** | **daily_cap** = block new buys when daily PnL hits target. **drawdown** = block new buys when drawdown from peak exceeds threshold. |
+| **strategy.py** | Green Light 4-point entry + prob_gain; exits (stop, TP at VWAP, scale-out, trailing, breakeven, max hold, health check). Long and short. |
+| **apps/consumer.py** | Stdin entry: reads events, updates state, runs strategy + executor; scale-out 25% at 1%/2%/3%. |
 | **apps/test_paper_order.py** | One-off: submit 1 paper BUY to verify Alpaca API. |
-| **executor.py** | Places orders on Alpaca; exposes `get_account_equity()` for daily cap. |
+| **execution/executor.py** | Places orders on Alpaca (market or limit); exposes `get_account_equity()` for daily cap. |
 
-**Adding a business rule:** Add a new module under `rules/` (e.g. `rules/max_drawdown.py`) that exports something like `is_rule_blocking_buy() -> bool`. In `strategy.decide()`, pass that into the existing “block buy” checks and add a new `Decision("hold", ..., "max_drawdown")` branch. No need to change signals or consumer.
+**Adding a business rule:** Add a new module under `brain/rules/` (e.g. `drawdown.py` already exists) that exports a check like `is_drawdown_halt() -> bool`. In `strategy.decide()`, call it in the block-buy section and return `Decision("hold", ..., "drawdown_halt")`. Register in `rules/__init__.py`. No need to change signals or consumer.
 
 **Go ↔ Python transport:** The Go engine streams NDJSON to the brain over **stdin** (pipe). The brain’s entry point is “receive events, update state, run strategy, optionally place order.”
 
@@ -400,10 +391,11 @@ For a trading app that needs fresh data:
 
 ## Switching to production (later)
 
-When you’re ready for live data:
+When you’re ready for live trading:
 
-1. Create a **live** Alpaca account and get live API keys.  
+1. Create a **live** Alpaca account and get **live** API keys (separate from paper).
 2. In `.env`, set:
-   - `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` to your **live** keys  
-   - `ALPACA_DATA_BASE_URL=https://data.alpaca.markets`  
-3. Run the same commands as above; the app will use live market data.
+   - `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` to your **live** keys
+   - `TRADE_PAPER=false` (or `APCA_PAPER=false`) so the SDK uses the live trading endpoint (`https://api.alpaca.markets`).
+   - Optionally `ALPACA_DATA_BASE_URL` for the data API if you override it.
+3. Run the same commands as above; the app will place live orders. See **python-brain/README.md** (Live trading) for PDT notes if your account is under $25k.

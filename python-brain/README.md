@@ -14,21 +14,20 @@ python-brain/
 │   ├── run_screener.py # Stock scanner: daily opportunity pool (Z/volume), output top N to file.
 │   └── test_paper_order.py # One-off test: submit 1 paper BUY to verify Alpaca API.
 └── brain/              # Library package (do not run directly)
-    ├── config.py       # All thresholds and flags from env.
-    ├── log_config.py   # Logging init (LOG_LEVEL, stderr).
-    ├── strategy.py     # Orchestrates signals + rules → buy/sell/hold.
-    ├── executor.py     # Places orders on Alpaca; get_account_equity() for daily cap.
+    ├── core/           # config.py, log_config.py (thresholds, LOG_LEVEL from env).
+    ├── strategy/       # strategy.py: Green Light 4-point entry + exits (stop, TP at VWAP, trailing, breakeven). Long and short.
+    ├── execution/      # executor.py: places orders on Alpaca (market/limit); get_account_equity() for daily cap.
     ├── learning/       # Learning from trades + generated filter rules (see brain/learning/README.md)
     │   ├── experience_buffer.py  # Records entry/exit to data/experience_buffer.jsonl for the optimizer.
-    │   └── generated_rules.py    # Loads active rules; should_block_buy(context) before placing a buy.
+    │   └── generated_rules.py   # Loads active rules; should_block_buy(context) before placing a buy.
     ├── signals/        # Score inputs for strategy
-    │   ├── news_sentiment.py  # FinBERT/VADER on news (headline + summary).
-    │   ├── composite.py       # News + Social (placeholder) + Momentum + optional Technical (RSI); consensus.
-    │   ├── technical.py      # RSI (and optional indicators) from price series; score in [-1, 1].
-    │   └── microstructure.py # VWAP, ATR, Z-Score (pro-style); OFI stub for tape data.
+    │   ├── news_sentiment.py  # FinBERT/VADER on news (kill switch).
+    │   ├── composite.py      # Optional composite; strategy uses Green Light (structure, pattern, momentum, OFI) for entry.
+    │   ├── technical.py      # RSI, MACD, patterns from price series; score in [-1, 1] for Green Light pattern check.
+    │   └── microstructure.py # VWAP, ATR, Z-Score (pro-style); OFI for tape data.
     └── rules/          # Business rules
-        ├── consensus.py   # Require N sources positive to allow buy.
-        └── daily_cap.py   # 0.25% daily shutdown (no new buys when daily PnL ≥ 0.25%).
+        ├── daily_cap.py   # Block new buys when daily PnL hits target/soft cap.
+        └── drawdown.py    # Block new buys when drawdown from peak exceeds threshold.
 ```
 
 ## Running
@@ -43,6 +42,8 @@ python-brain/
   python3 apps/replay_e2e.py | python3 apps/consumer.py
   ```
   You should see event logs, composite/strategy output, and optionally a paper order if `TRADE_PAPER=true` and Alpaca keys are set. To only test the pipeline without placing orders, set `TRADE_PAPER=false` or omit Alpaca keys.
+
+- **Live trading:** Use Alpaca **live** API keys (not paper) and set `TRADE_PAPER=false` (or `APCA_PAPER=false`). The executor uses the Alpaca SDK's `TradingClient(..., paper=...)`; when `paper=False` the SDK uses the correct live endpoint (`https://api.alpaca.markets`). No code or URL overrides needed. **PDT:** This app can open and close positions the same day (stops, targets, VWAP exits, health check), so round-trips count as day trades. In the US, accounts under $25k are subject to the Pattern Day Trader rule (max 3 day trades in 5 business days). To avoid PDT restrictions either maintain ≥$25k equity or limit day-trade frequency (e.g. hold overnight where possible); the app does not enforce a day-trade cap.
 
 - **Stock scanner (daily opportunity pool):** Don’t hard-code a static list—screen the universe each day and activate only the top 3–5 names. Run every morning (e.g. discovery 7:00–9:30 ET); writes active symbols to a file the consumer reads.
   - **Universe:** Start with `lab_12`, `sp400`, `nasdaq100`, or `file:path/to/symbols.txt`. Scanner runs at container start and 7:00 ET (discovery) on full market days.
@@ -97,6 +98,7 @@ Install deps first: `python3 -m pip install -r requirements.txt` (from repo root
 
 ### Long continuous runs (e.g. 2 weeks without restart)
 
+- **Brain restart:** If the Python consumer process exits (crash, OOM, etc.), the Go engine restarts it after a 5s backoff and continues piping events. Strategy and orders resume once the new process is up; a short gap of events may be missed during the restart. Explicit shutdown (engine exit at 4pm or container stop) does not restart.
 - **Experience buffer:** The buffer file (`data/experience_buffer.jsonl`) is trimmed by default to the last 20,000 lines (when it exceeds that, the file is rewritten with only the last N lines — older lines are dropped). See **brain/learning/experience_buffer.py**.
 - **Memory:** The consumer prunes symbol-keyed caches (payload, session, sentiment, price history, order cooldown) to the active symbol list + current positions when `OPPORTUNITY_ENGINE_ENABLED=true` and `ACTIVE_SYMBOLS_FILE` is set, so memory stays bounded as the watchlist changes. Shadow strategy keeps only the last 1000 ghost trades per shadow. Scale-out state is cleared when a position is closed.
 - **Logging:** Use `LOG_LEVEL=INFO` (or `WARN`) in production so logs don’t grow too fast; rotate logs externally if needed.
