@@ -455,26 +455,6 @@ def run_stop_loss_check() -> None:
             _try_place_order(d, snapshot_context={"unrealized_pl_pct": pl_pct, "ofi": combined.get("ofi")})
 
 
-def _is_in_closing_window() -> bool:
-    """True if we're in the closing window (weekday ET >= CLOSE_LOSSES_BY_ET) for overnight-carry: close only losers."""
-    if not getattr(brain_config, "OVERNIGHT_CARRY_ENABLED", False):
-        return False
-    start_et = getattr(brain_config, "CLOSE_LOSSES_BY_ET", "").strip()
-    if not start_et or ZoneInfo is None:
-        return False
-    try:
-        et = datetime.now(ZoneInfo("America/New_York"))
-        if et.weekday() > 4:
-            return False
-        parts = start_et.strip().split(":")
-        if len(parts) != 2:
-            return False
-        start_h, start_m = int(parts[0]), int(parts[1])
-        return (et.hour > start_h) or (et.hour == start_h and et.minute >= start_m)
-    except Exception:
-        return False
-
-
 def _is_in_health_check_window() -> bool:
     """True if weekday ET >= PORTFOLIO_HEALTH_CHECK_ET (e.g. 16:00): close all losers, keep winners with trailing ATR."""
     check_et = getattr(brain_config, "PORTFOLIO_HEALTH_CHECK_ET", "").strip()
@@ -535,28 +515,10 @@ def run_eod_prune_if_due() -> None:
 
 
 def run_close_losses_before_close() -> None:
-    """Overnight carry: in closing window, close only positions that are in loss; let winners run (trailing ATR handles exit)."""
+    """Overnight carry: only run EOD prune at 15:50 ET (close losers via API; winners held). No in-memory close loop."""
     if is_morning_flush():
         return  # Morning guardrail: no automated selling 09:30–09:45 ET
-    run_eod_prune_if_due()  # At 15:50 ET run API-based EOD prune once per day
-    # In the EOD prune window (15:50–15:52) we already closed losers via API; skip in-memory loop to avoid double-close
-    if is_eod_prune_time(getattr(brain_config, "EOD_PRUNE_AT_ET", "15:50")):
-        return
-    if not _is_in_closing_window():
-        return
-    for sym, qty in list(positions_qty.items()):
-        if qty == 0:
-            continue
-        pl_pct = position_unrealized_pl_pct.get(sym)
-        if pl_pct is None or pl_pct >= 0:
-            continue
-        size = max(1, min(abs(qty), brain_config.STRATEGY_MAX_QTY))
-        if qty > 0:
-            d = Decision("sell", sym, size, "close_loss_before_close")
-        else:
-            d = Decision("buy", sym, size, "close_short_before_close")
-        log.info("close_loss_before_close symbol=%s pl_pct=%.2f%% %s qty=%d", sym, pl_pct * 100, "cover short" if qty < 0 else "close loser", d.qty)
-        _try_place_order(d, skip_cooldown=True)
+    run_eod_prune_if_due()  # At 15:50 ET: API-based EOD prune once per day (only logic for closing-window close)
 
 
 def run_flat_when_daily_target() -> None:
