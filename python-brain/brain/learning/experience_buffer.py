@@ -5,11 +5,7 @@ Saves a MarketSnapshot for every entry and exit. Snapshots capture indicator sta
 (Z-Score, RSI, MACD, OFI, ATR) and market regime (trend vs range). Trades are labeled
 24h later: Success (hit target), False Positive (pattern failed), Late Entry (price moved before entry).
 
-Retention: Default 20000 lines (last N kept). When the file exceeds this, we trim by rewriting it with only the last N lines — older lines are removed (not overwritten in place). Override with EXPERIENCE_BUFFER_MAX_LINES env if needed. Learning is preserved: (1) Conviction uses an in-memory rolling window
-(last 100 outcomes per setup), not this file. (2) Strategy optimizer trains on whatever is in the
-buffer; a large window (e.g. 50k–100k lines) still gives plenty of recent trades, and recent data
-is usually more relevant for non-stationary markets. To archive long-term data before trimming,
-copy the file elsewhere or run the optimizer with --buffer pointing at an archived copy.
+Retention: Default 20000 lines (last N kept). When the file exceeds this, we trim by rewriting it with only the last N lines — older lines are removed (not overwritten in place). Override with EXPERIENCE_BUFFER_MAX_LINES env if needed. The strategy optimizer trains on whatever is in the buffer; a large window (e.g. 50k–100k lines) still gives plenty of recent trades, and recent data is usually more relevant for non-stationary markets. To archive long-term data before trimming, copy the file elsewhere or run the optimizer with --buffer pointing at an archived copy.
 """
 import json
 import logging

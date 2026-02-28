@@ -207,7 +207,10 @@ def decide(
     # Breakeven at 50% of way to VWAP: once price has reached halfway to VWAP, don't give it back — sell if pl <= 0
     be_halfway = getattr(config, "BREAKEVEN_AT_HALFWAY_TO_VWAP", False)
     if be_halfway and have_position and entry_price and entry_price > 0 and current_price and current_price > 0 and vwap_distance_pct is not None:
-        vwap_val = current_price / (1.0 + vwap_distance_pct / 100.0)
+        denom_vwap = 1.0 + vwap_distance_pct / 100.0
+        if abs(denom_vwap) < 1e-6:
+            denom_vwap = 1e-6  # avoid division by zero when vwap_distance_pct <= -100
+        vwap_val = current_price / denom_vwap
         if vwap_val > entry_price:
             denom = vwap_val - entry_price
             progress = (current_price - entry_price) / denom if denom > 0 else 0.0
@@ -258,7 +261,10 @@ def decide(
                 return Decision("buy", symbol, exit_qty, f"trailing_atr_above_vwap pl={unrealized_pl_pct*100:.2f}%" if unrealized_pl_pct is not None else "trailing_atr_above_vwap")
 
     if be_halfway and have_short_position and entry_price and entry_price > 0 and current_price and current_price > 0 and vwap_distance_pct is not None:
-        vwap_val = current_price / (1.0 + vwap_distance_pct / 100.0)
+        denom_vwap = 1.0 + vwap_distance_pct / 100.0
+        if abs(denom_vwap) < 1e-6:
+            denom_vwap = 1e-6  # avoid division by zero when vwap_distance_pct <= -100
+        vwap_val = current_price / denom_vwap
         if vwap_val < entry_price:
             denom = entry_price - vwap_val
             progress = (entry_price - current_price) / denom if denom > 0 else 0.0

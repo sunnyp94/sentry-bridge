@@ -29,7 +29,6 @@ except ImportError:
     ZoneInfo = None
 
 from brain.strategy import (
-    sentiment_score_from_news,
     update_and_get_sentiment_ema,
     get_sentiment_ema,
     set_kill_switch_from_news,
@@ -185,6 +184,8 @@ ORDER_COOLDOWN_SEC = getattr(brain_config, "ORDER_COOLDOWN_SEC", 30)
 last_order_time_by_symbol: dict[str, float] = {}
 # Rolling price history per symbol for RSI/technical (when USE_TECHNICAL_INDICATORS=true)
 price_history_by_symbol: dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
+# Rolling (price, size) per symbol for intraday VWAP (used by decide() for scale-out/TP/trailing at VWAP)
+_vwap_trades_by_symbol: dict[str, deque] = defaultdict(lambda: deque(maxlen=500))
 # Cached equity from last positions event (avoids extra Alpaca call when sizing a buy)
 _last_equity: Optional[float] = None
 # Flat-on-startup: run once on first positions event when FLAT_POSITIONS_ON_STARTUP is true
@@ -202,6 +203,29 @@ def _parse_unrealized_plpc(raw) -> Optional[float]:
     if abs(v) > 1.0:
         v = v / 100.0
     return v
+
+
+def _get_vwap(symbol: str) -> Optional[float]:
+    """Volume-weighted average price from recent trades (rolling window). None if insufficient data."""
+    trades = list(_vwap_trades_by_symbol.get(symbol, []))
+    if not trades:
+        return None
+    total_pv = sum(p * s for p, s in trades)
+    total_s = sum(s for _, s in trades)
+    if total_s <= 0:
+        return None
+    return total_pv / total_s
+
+
+def _get_vwap_distance_pct(symbol: str, current_price: Optional[float]) -> Optional[float]:
+    """Percentage distance of current price from VWAP (positive = above VWAP). None if no VWAP or price."""
+    if current_price is None or current_price <= 0:
+        return None
+    vwap = _get_vwap(symbol)
+    if vwap is None:
+        return None
+    from brain.signals.microstructure import vwap_distance_pct as _vwap_dist
+    return _vwap_dist(current_price, vwap)
 
 
 def _get_price(symbol: str) -> Optional[float]:
@@ -347,7 +371,7 @@ def _try_place_order(
             log.debug("experience_buffer record skipped: %s", e)
         # Shadow strategy: record ghost buy/sell for 3 shadow models (long-only; cover buys are not new longs)
         try:
-            from brain.shadow_strategy import shadow_on_buy, shadow_on_sell, shadow_update, check_promotion, get_shadow_stats
+            from brain.shadow_strategy import shadow_on_buy, shadow_on_sell, shadow_update
             if d.action == "buy" and price and price > 0 and (d.reason or "").strip() == "green_light_4pt":
                 shadow_on_buy(d.symbol, price, d.qty)
             elif d.action == "sell" and price and price > 0:
@@ -421,10 +445,9 @@ def run_stop_loss_check() -> None:
             cur_price = None
         entry_ts = position_entry_time.get(sym)
         bars_held_days = max(0, int((time.time() - entry_ts) / 86400)) if entry_ts and entry_ts > 0 else None
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=None, peak_unrealized_pl_pct=position_peak_unrealized_pl_pct.get(sym), bars_held=bars_held_days)
+        vwap_dist = _get_vwap_distance_pct(sym, cur_price)
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=is_daily_cap_reached(), trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, vwap_distance_pct=vwap_dist, scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=None, peak_unrealized_pl_pct=position_peak_unrealized_pl_pct.get(sym), bars_held=bars_held_days)
         if d.action in ("sell", "buy") and d.qty > 0:
-            if d.reason == "scale_out_50_at_vwap":
-                _scaled_50_at_vwap.add(sym)
             log.warning("stop_loss symbol=%s pl_pct=%.2f%% %s qty=%d reason=%s", d.symbol, pl_pct * 100, d.action, d.qty, d.reason)
             _try_place_order(d, snapshot_context={"unrealized_pl_pct": pl_pct, "ofi": combined.get("ofi")})
 
@@ -569,7 +592,8 @@ def run_strategy_for_symbols(symbols: list) -> None:
         _ltf_prices = list(price_history_by_symbol.get(sym, []))
         entry_ts = position_entry_time.get(sym)
         bars_held_days = max(0, int((time.time() - entry_ts) / 86400)) if entry_ts and entry_ts > 0 else None
-        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=tech, structure_ok=_structure_ok, ltf_prices=_ltf_prices, peak_unrealized_pl_pct=position_peak_unrealized_pl_pct.get(sym), bars_held=bars_held_days)
+        vwap_dist = _get_vwap_distance_pct(sym, cur_price)
+        d = decide(sym, sent_ema, prob, pos_qty, sess, unrealized_pl_pct=pl_pct, daily_cap_reached=daily_cap, drawdown_halt=drawdown_halt, trend_ok=_trend_ok(sym), vol_ok=_vol_ok(sym), ofi=combined.get("ofi"), entry_price=position_entry_price.get(sym), current_price=cur_price, vwap_distance_pct=vwap_dist, scaled_50_at_vwap=(sym in _scaled_50_at_vwap), in_health_check_window=_is_in_health_check_window(), technical_score=tech, structure_ok=_structure_ok, ltf_prices=_ltf_prices, peak_unrealized_pl_pct=position_peak_unrealized_pl_pct.get(sym), bars_held=bars_held_days)
         if d.reason == "scale_out_50_at_vwap":
             _scaled_50_at_vwap.add(sym)
         log.info(
@@ -646,8 +670,15 @@ def handle_event(ev: dict) -> None:
             session_by_symbol[sym] = payload.get("session") or "regular"
             set_kill_switch_from_returns(payload.get("return_1m"), payload.get("return_5m"))
             p = payload.get("price")
+            size = payload.get("size", 0)
+            try:
+                size = int(size) if size is not None else 0
+            except (TypeError, ValueError):
+                size = 0
             if p is not None and isinstance(p, (int, float)) and p > 0:
                 price_history_by_symbol[sym].append(float(p))
+            if p is not None and isinstance(p, (int, float)) and p > 0 and size > 0:
+                _vwap_trades_by_symbol[sym].append((float(p), size))
     elif typ == "quote":
         sym = payload.get("symbol")
         if sym:
@@ -753,6 +784,9 @@ def handle_event(ev: dict) -> None:
             for sym in list(last_order_time_by_symbol):
                 if sym not in keep:
                     last_order_time_by_symbol.pop(sym, None)
+            for sym in list(_vwap_trades_by_symbol):
+                if sym not in keep:
+                    _vwap_trades_by_symbol.pop(sym, None)
         get_equity_ms = 0.0
         try:
             from brain.executor import get_account_equity
