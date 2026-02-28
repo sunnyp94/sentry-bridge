@@ -389,13 +389,12 @@ For a trading app that needs fresh data:
 - **True HFT** (sub-millisecond) needs co-location and direct feeds; this app is REST/streaming over the internet, so aim for **low-second** latency (streaming) or **few-second** (polling).
 - Use **streaming** for price and news when you move to a production trading loop; keep **volatility** on a slower schedule (e.g. minute or daily bars).
 
-## Switching to production (later)
+## Switching to live trading
 
-When you’re ready for live trading:
+When you're ready to place **real** orders, see **[docs/LIVE_TRADING.md](docs/LIVE_TRADING.md)** for step-by-step instructions. In short:
 
-1. Create a **live** Alpaca account and get **live** API keys (separate from paper).
-2. In `.env`, set:
-   - `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` to your **live** keys
-   - `TRADE_PAPER=false` (or `APCA_PAPER=false`) so the SDK uses the live trading endpoint (`https://api.alpaca.markets`).
-   - Optionally `ALPACA_DATA_BASE_URL` for the data API if you override it.
-3. Run the same commands as above; the app will place live orders. See **python-brain/README.md** (Live trading) for PDT notes if your account is under $25k.
+1. Get **live** Alpaca API keys (from the Live dashboard, not Paper).
+2. In `.env`: set your live keys, `TRADE_PAPER=false`, `LIVE_TRADING_ENABLED=true`, and `APCA_API_BASE_URL=https://api.alpaca.markets`.
+3. Restart the app (e.g. `docker compose down` then `docker compose up -d --force-recreate` on the VM).
+
+The app will only place live orders when both `TRADE_PAPER=false` and `LIVE_TRADING_ENABLED=true` are set. See **python-brain/README.md** (Live trading) for PDT notes if your account is under $25k.

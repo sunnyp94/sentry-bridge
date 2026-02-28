@@ -6,16 +6,9 @@ Strategy: Green Light only. Single place that turns signals and rules into buy/s
 - All thresholds from config.py (env).
 """
 import logging
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Dict, Literal, Optional
-
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    ZoneInfo = None
-
 import os
+from dataclasses import dataclass
+from typing import Dict, Literal, Optional
 from brain.core import config
 
 log = logging.getLogger("brain.strategy")
@@ -70,19 +63,6 @@ def set_kill_switch_from_returns(return_1m: Optional[float], return_5m: Optional
 def set_kill_switch(active: bool) -> None:
     global _kill_switch_active
     _kill_switch_active = active
-
-
-def _parse_et_time(s: str) -> Optional[tuple]:
-    """Parse 'HH:MM' (24h) -> (hour, minute) or None."""
-    if not s or ":" not in s:
-        return None
-    parts = s.strip().split(":")
-    if len(parts) != 2:
-        return None
-    try:
-        return (int(parts[0]), int(parts[1]))
-    except (TypeError, ValueError):
-        return None
 
 
 def probability_gain(payload: dict) -> float:
@@ -142,7 +122,7 @@ def decide(
     Green Light only: buy when 4-point checklist passes; exit on stop/TP/VWAP/trailing/breakeven only.
     """
     prob_thresh = config.PROB_GAIN_THRESHOLD
-    max_qty = config.STRATEGY_MAX_QTY
+    max_qty = max(1, config.STRATEGY_MAX_QTY)  # ensure exit_qty is never 0 when we have a position
     # Volatility-adjusted stop: ATR-based when enabled and available
     use_atr = getattr(config, "USE_ATR_STOP", False)
     if use_atr and atr_stop_pct is not None and atr_stop_pct > 0:

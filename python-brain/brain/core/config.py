@@ -198,6 +198,9 @@ PORTFOLIO_HEALTH_CHECK_ET = os.environ.get("PORTFOLIO_HEALTH_CHECK_ET", "16:00")
 NO_NEW_BUYS_AFTER_ET = os.environ.get("NO_NEW_BUYS_AFTER_ET", "15:45").strip()
 OVERNIGHT_CARRY_ENABLED = True
 CLOSE_LOSSES_BY_ET = os.environ.get("CLOSE_LOSSES_BY_ET", "15:50").strip()
+# Smart Position Management: EOD prune at 15:50 ET — close only losers (unrealized_plpc < threshold)
+EOD_PRUNE_AT_ET = os.environ.get("EOD_PRUNE_AT_ET", "15:50").strip()
+EOD_PRUNE_STOP_LOSS_PCT = _float("EOD_PRUNE_STOP_LOSS_PCT", "-2.0")  # -2% (decimal -0.02)
 
 # -----------------------------------------------------------------------------
 # Strategy optimizer (always runs after market close)

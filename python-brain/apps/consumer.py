@@ -43,6 +43,16 @@ from brain.rules.daily_cap import update_equity, is_daily_cap_reached, should_fl
 from brain.rules.drawdown import update_drawdown_peak, is_drawdown_halt
 from brain.market_calendar import is_full_trading_day
 from brain import config as brain_config
+from brain.core.parse_utils import parse_unrealized_plpc
+try:
+    from brain.execution.smart_position_management import is_morning_flush, run_eod_prune, is_eod_prune_time
+except ImportError:
+    def is_morning_flush():
+        return False
+    def run_eod_prune(*args, **kwargs):
+        return (0, 0)
+    def is_eod_prune_time(*args, **kwargs):
+        return False
 from brain.discovery import run_discovery, DiscoveryEngine, _parse_et_time as discovery_parse_et
 
 # OFI (Order Flow Imbalance) from live trade/quote when USE_OFI=true (brain.signals.microstructure.OFITracker)
@@ -190,19 +200,8 @@ _vwap_trades_by_symbol: dict[str, deque] = defaultdict(lambda: deque(maxlen=500)
 _last_equity: Optional[float] = None
 # Flat-on-startup: run once on first positions event when FLAT_POSITIONS_ON_STARTUP is true
 _flat_on_startup_done: bool = False
-
-
-def _parse_unrealized_plpc(raw) -> Optional[float]:
-    """Parse Alpaca unrealized_plpc (string or number) to decimal. None if missing/invalid."""
-    if raw is None:
-        return None
-    try:
-        v = float(raw)
-    except (TypeError, ValueError):
-        return None
-    if abs(v) > 1.0:
-        v = v / 100.0
-    return v
+# EOD prune: run once per calendar day (ET) at 15:50
+_eod_prune_done_date: Optional[str] = None
 
 
 def _get_vwap(symbol: str) -> Optional[float]:
@@ -268,7 +267,11 @@ def _try_place_order(
     if not skip_cooldown and (now - last_order_time_by_symbol.get(d.symbol, 0) < ORDER_COOLDOWN_SEC):
         log.warning("skip order (cooldown) symbol=%s", d.symbol)
         return False
-    if os.environ.get("TRADE_PAPER", "true").lower() not in ("true", "1", "yes"):
+    # Place orders when: (1) TRADE_PAPER=true (paper), or (2) TRADE_PAPER=false and LIVE_TRADING_ENABLED=true (live).
+    # When TRADE_PAPER=false and LIVE_TRADING_ENABLED is not set: log only, no orders.
+    paper = os.environ.get("TRADE_PAPER", "true").lower() in ("true", "1", "yes")
+    live_ok = os.environ.get("LIVE_TRADING_ENABLED", "").lower() in ("true", "1", "yes")
+    if not paper and not live_ok:
         return False
     from brain.executor import place_order, get_account_equity
     price = price_override if price_override is not None and price_override > 0 else _get_price(d.symbol)
@@ -419,6 +422,8 @@ def _run_scale_out_check() -> None:
 
 def run_stop_loss_check() -> None:
     """On positions update: sell long at/below stop, buy to cover short at/below stop (via decide())."""
+    if is_morning_flush():
+        return  # Morning guardrail: no automated selling 09:30–09:45 ET (protect overnight holds)
     _run_scale_out_check()
     stop_decimal = STOP_LOSS_PCT / 100.0
     for sym, pl_pct in position_unrealized_pl_pct.items():
@@ -492,6 +497,8 @@ def _is_in_health_check_window() -> bool:
 
 def run_portfolio_health_check() -> None:
     """At 16:00 ET (PORTFOLIO_HEALTH_CHECK_ET): close all losing positions; winners keep trailing ATR."""
+    if is_morning_flush():
+        return  # Morning guardrail: no automated selling 09:30–09:45 ET
     if not _is_in_health_check_window():
         return
     for sym, qty in list(positions_qty.items()):
@@ -500,7 +507,7 @@ def run_portfolio_health_check() -> None:
         pl_pct = position_unrealized_pl_pct.get(sym)
         if pl_pct is None or pl_pct >= 0:
             continue
-        size = min(abs(qty), brain_config.STRATEGY_MAX_QTY)
+        size = max(1, min(abs(qty), brain_config.STRATEGY_MAX_QTY))
         if qty > 0:
             d = Decision("sell", sym, size, "portfolio_health_check_loser")
         else:
@@ -509,8 +516,34 @@ def run_portfolio_health_check() -> None:
         _try_place_order(d, skip_cooldown=True)
 
 
+def run_eod_prune_if_due() -> None:
+    """Smart Position Management: at 15:50 ET (once per day), close only losing positions via API; profitable = Hold."""
+    global _eod_prune_done_date
+    if not is_eod_prune_time(getattr(brain_config, "EOD_PRUNE_AT_ET", "15:50")):
+        return
+    try:
+        if ZoneInfo:
+            today_et = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        else:
+            today_et = datetime.utcnow().strftime("%Y-%m-%d")
+    except Exception:
+        today_et = datetime.utcnow().strftime("%Y-%m-%d")
+    if _eod_prune_done_date == today_et:
+        return
+    _eod_prune_done_date = today_et
+    threshold_pct = getattr(brain_config, "EOD_PRUNE_STOP_LOSS_PCT", -2.0)
+    closed, hold = run_eod_prune(stop_loss_pct=threshold_pct, eod_prune_at_et=getattr(brain_config, "EOD_PRUNE_AT_ET", "15:50"))
+    log.info("EOD prune done closed=%d hold=%d (threshold=%.1f%%)", closed, hold, threshold_pct)
+
+
 def run_close_losses_before_close() -> None:
     """Overnight carry: in closing window, close only positions that are in loss; let winners run (trailing ATR handles exit)."""
+    if is_morning_flush():
+        return  # Morning guardrail: no automated selling 09:30–09:45 ET
+    run_eod_prune_if_due()  # At 15:50 ET run API-based EOD prune once per day
+    # In the EOD prune window (15:50–15:52) we already closed losers via API; skip in-memory loop to avoid double-close
+    if is_eod_prune_time(getattr(brain_config, "EOD_PRUNE_AT_ET", "15:50")):
+        return
     if not _is_in_closing_window():
         return
     for sym, qty in list(positions_qty.items()):
@@ -519,7 +552,7 @@ def run_close_losses_before_close() -> None:
         pl_pct = position_unrealized_pl_pct.get(sym)
         if pl_pct is None or pl_pct >= 0:
             continue
-        size = min(abs(qty), brain_config.STRATEGY_MAX_QTY)
+        size = max(1, min(abs(qty), brain_config.STRATEGY_MAX_QTY))
         if qty > 0:
             d = Decision("sell", sym, size, "close_loss_before_close")
         else:
@@ -530,6 +563,8 @@ def run_close_losses_before_close() -> None:
 
 def run_flat_when_daily_target() -> None:
     """When daily PnL >= target and FLAT_WHEN_DAILY_TARGET_HIT: close all positions (profit daily and stop)."""
+    if is_morning_flush():
+        return  # Morning guardrail: no automated selling 09:30–09:45 ET
     if not should_flat_all_for_daily_target():
         return
     for sym, qty in list(positions_qty.items()):
@@ -539,7 +574,7 @@ def run_flat_when_daily_target() -> None:
             continue
         if q == 0:
             continue
-        size = min(abs(q), brain_config.STRATEGY_MAX_QTY)
+        size = max(1, min(abs(q), brain_config.STRATEGY_MAX_QTY))
         if q > 0:
             d = Decision("sell", sym, size, "daily_target_hit")
         else:
@@ -707,7 +742,7 @@ def handle_event(ev: dict) -> None:
                 if parsed:
                     now_et = datetime.now(ZoneInfo("America/New_York"))
                     run_flat = (now_et.hour, now_et.minute) >= parsed
-            if run_flat:
+            if run_flat and not is_morning_flush():  # Never blanket-close 09:30–09:45 ET (protect overnight holds)
                 try:
                     from brain.executor import close_all_positions_from_api
                     close_all_positions_from_api()
@@ -734,7 +769,7 @@ def handle_event(ev: dict) -> None:
                 # Always store short as negative (API may send + or - qty)
                 qty = -abs(qty)
             positions_qty[sym] = qty
-            plpc = _parse_unrealized_plpc(p.get("unrealized_plpc"))
+            plpc = parse_unrealized_plpc(p.get("unrealized_plpc"))
             if plpc is not None:
                 position_unrealized_pl_pct[sym] = plpc
                 # Track peak so breakeven/trailing can fire (long and short)
@@ -1012,8 +1047,10 @@ def main() -> None:
 
     log.info("reading from stdin (NDJSON)")
     if os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY_ID"):
-        trade = os.environ.get("TRADE_PAPER", "true").lower() in ("true", "1", "yes")
-        log.info("Alpaca keys set; TRADE_PAPER=%s (strategy will %s)", trade, "place paper orders" if trade else "log decisions only")
+        paper = os.environ.get("TRADE_PAPER", "true").lower() in ("true", "1", "yes")
+        live_ok = os.environ.get("LIVE_TRADING_ENABLED", "").lower() in ("true", "1", "yes")
+        mode = "place paper orders" if paper else ("place live orders" if live_ok else "log decisions only")
+        log.info("Alpaca keys set; TRADE_PAPER=%s LIVE_TRADING_ENABLED=%s (strategy will %s)", paper, live_ok, mode)
     else:
         log.info("No Alpaca keys; strategy will log decisions only (no orders)")
 

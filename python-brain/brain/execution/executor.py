@@ -119,7 +119,15 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
     Otherwise submit market order.
     For buys when USE_LIMIT_ORDERS=true but no price was provided, fetches latest quote so limit is still used.
     """
-    if decision.action == "hold" or decision.qty <= 0:
+    if decision.action == "hold":
+        return False
+    try:
+        qty = int(round(decision.qty))
+    except (TypeError, ValueError):
+        log.error("place_order invalid qty type: %s", type(decision.qty))
+        return False
+    if qty <= 0:
+        log.warning("place_order qty=%d <= 0; skip", qty)
         return False
     if TradingClient is None or MarketOrderRequest is None:
         log.error("alpaca-py not installed. Run: python3 -m pip install alpaca-py (or: pip install -r requirements.txt)")
@@ -139,7 +147,7 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
             current_price = fetched
             log.info("place_order BUY using fetched quote price=%.2f for limit", current_price)
     price_str = f"{current_price:.2f}" if current_price is not None and current_price > 0 else "market"
-    log.info("place_order %s %s qty=%d price=%s", decision.action.upper(), decision.symbol, decision.qty, price_str)
+    log.info("place_order %s %s qty=%d price=%s", decision.action.upper(), decision.symbol, qty, price_str)
     side = OrderSide.BUY if decision.action == "buy" else OrderSide.SELL
     use_limit = config.USE_LIMIT_ORDERS and current_price is not None and current_price > 0 and LimitOrderRequest is not None
     try:
@@ -153,7 +161,7 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
                 limit_price = round(current_price * (1.0 + offset), 2)
             req = LimitOrderRequest(
                 symbol=decision.symbol,
-                qty=decision.qty,
+                qty=qty,
                 side=side,
                 time_in_force=TimeInForce.DAY,
                 limit_price=limit_price,
@@ -161,23 +169,44 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
             order = client.submit_order(req)
             log.debug(
                 "latency step=submit_order ms=%.1f LIMIT %s %d %s @ %.2f -> order id=%s",
-                (time.perf_counter() - t0) * 1000, decision.action.upper(), decision.qty, decision.symbol, limit_price, getattr(order, "id", "?"),
+                (time.perf_counter() - t0) * 1000, decision.action.upper(), qty, decision.symbol, limit_price, getattr(order, "id", "?"),
             )
         else:
             req = MarketOrderRequest(
                 symbol=decision.symbol,
-                qty=decision.qty,
+                qty=qty,
                 side=side,
                 time_in_force=TimeInForce.DAY,
             )
             order = client.submit_order(req)
             log.debug(
                 "latency step=submit_order ms=%.1f %s %d %s -> order id=%s",
-                (time.perf_counter() - t0) * 1000, decision.action.upper(), decision.qty, decision.symbol, getattr(order, "id", "?"),
+                (time.perf_counter() - t0) * 1000, decision.action.upper(), qty, decision.symbol, getattr(order, "id", "?"),
             )
         return True
     except Exception as e:
         log.exception("order failed: %s", e)
+        return False
+
+
+def close_position(symbol: str) -> bool:
+    """
+    Close a single position by symbol (full qty). Uses Alpaca close_position(symbol).
+    Long → market sell; short → market buy (cover). Returns True if closed successfully.
+    """
+    client = _client()
+    if client is None:
+        log.warning("close_position: no client; skip %s", symbol)
+        return False
+    sym = (symbol or "").strip()
+    if not sym:
+        return False
+    try:
+        client.close_position(sym)
+        log.info("close_position closed %s", sym)
+        return True
+    except Exception as e:
+        log.warning("close_position %s failed: %s", sym, e)
         return False
 
 
@@ -241,11 +270,11 @@ def close_all_positions(positions: List[Dict[str, Any]], reason: str = "flat_on_
     try:
         result = client.cancel_orders()
         if isinstance(result, list) and result:
-            log.info("flat_on_startup: cancelled %d open order(s)", len(result))
+            log.info("%s: cancelled %d open order(s)", reason, len(result))
         elif result:
-            log.info("flat_on_startup: cancelled open orders")
+            log.info("%s: cancelled open orders", reason)
     except Exception as e:
-        log.warning("flat_on_startup: cancel_orders failed: %s", e)
+        log.warning("%s: cancel_orders failed: %s", reason, e)
     if not positions:
         return 0
     placed = 0
@@ -273,9 +302,9 @@ def close_all_positions(positions: List[Dict[str, Any]], reason: str = "flat_on_
             )
             client.submit_order(req)
             placed += 1
-            log.info("flat_on_startup %s %s qty=%d", "sell" if side == "long" else "buy", sym, close_qty)
+            log.info("%s %s %s qty=%d", reason, "sell" if side == "long" else "buy", sym, close_qty)
         except Exception as e:
-            log.warning("flat_on_startup %s %s qty=%d failed: %s", "sell" if side == "long" else "buy", sym, close_qty, e)
+            log.warning("%s %s %s qty=%d failed: %s", reason, "sell" if side == "long" else "buy", sym, close_qty, e)
     if placed:
-        log.info("flat_on_startup: placed %d order(s)", placed)
+        log.info("%s: placed %d order(s)", reason, placed)
     return placed
