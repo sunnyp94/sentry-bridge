@@ -198,8 +198,6 @@ price_history_by_symbol: dict[str, deque] = defaultdict(lambda: deque(maxlen=100
 _vwap_trades_by_symbol: dict[str, deque] = defaultdict(lambda: deque(maxlen=500))
 # Cached equity from last positions event (avoids extra Alpaca call when sizing a buy)
 _last_equity: Optional[float] = None
-# Flat-on-startup: run once on first positions event when FLAT_POSITIONS_ON_STARTUP is true
-_flat_on_startup_done: bool = False
 # EOD prune: run once per calendar day (ET) at 15:50
 _eod_prune_done_date: Optional[str] = None
 
@@ -731,25 +729,7 @@ def handle_event(ev: dict) -> None:
         if sym:
             last_payload_by_symbol[sym] = {**last_payload_by_symbol.get(sym, {}), **payload}
     elif typ == "positions":
-        global _last_equity, _flat_on_startup_done
-        # Flat-on-startup: fetch positions from API, cancel orders, close all (once on first positions event).
-        # If FLAT_POSITIONS_AT_ET is set (e.g. "09:30"), only run at or after that time ET so positions close at market open, not immediately.
-        if getattr(brain_config, "FLAT_POSITIONS_ON_STARTUP", False) and not _flat_on_startup_done:
-            run_flat = True
-            at_et = getattr(brain_config, "FLAT_POSITIONS_AT_ET", "").strip()
-            if at_et and ZoneInfo:
-                parsed = _parse_run_at_et(at_et)
-                if parsed:
-                    now_et = datetime.now(ZoneInfo("America/New_York"))
-                    run_flat = (now_et.hour, now_et.minute) >= parsed
-            if run_flat and not is_morning_flush():  # Never blanket-close 09:30–09:45 ET (protect overnight holds)
-                try:
-                    from brain.executor import close_all_positions_from_api
-                    close_all_positions_from_api()
-                except ImportError:
-                    from brain.executor import close_all_positions
-                    close_all_positions(payload.get("positions") or [])
-                _flat_on_startup_done = True
+        global _last_equity
         positions_qty.clear()
         position_unrealized_pl_pct.clear()
         position_entry_price.clear()

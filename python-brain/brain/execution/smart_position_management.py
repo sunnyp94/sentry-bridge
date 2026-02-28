@@ -168,9 +168,6 @@ def run_eod_prune(
 # -----------------------------------------------------------------------------
 # 3) Startup with positions from previous day (longs and shorts)
 # -----------------------------------------------------------------------------
-# The main app (consumer) already:
-# - Rebuilds positions from the first "positions" event (payload from Go/Alpaca).
-# - Stores longs as positive qty and shorts as negative qty (side == "short" -> qty = -abs(qty)).
-# - Uses is_morning_flush() to block automated selling 09:30–09:45 so overnight holds are safe.
-# Set FLAT_POSITIONS_ON_STARTUP=false when using Smart Position Management so we do not
-# blanket-close on startup; EOD prune and morning guardrail handle closing and protection.
+# The main app (consumer) rebuilds positions from the first "positions" event (payload from Go/Alpaca),
+# stores longs as positive qty and shorts as negative, and uses is_morning_flush() to block
+# automated selling 09:30–09:45. EOD prune (15:50) and morning guardrail handle closing and protection.

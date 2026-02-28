@@ -36,8 +36,6 @@ SOFT_CAP_TRAILING_PCT = 0.1
 DAILY_LOSS_CAP_PCT = _float("DAILY_LOSS_CAP_PCT", "1.0")
 DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT = _float("DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT", "5.0")
 FLAT_WHEN_DAILY_TARGET_HIT = False  # let winners run; only stop new buys when target hit
-FLAT_POSITIONS_ON_STARTUP = True
-FLAT_POSITIONS_AT_ET = os.environ.get("FLAT_POSITIONS_AT_ET", "09:30").strip()
 
 # -----------------------------------------------------------------------------
 # Buy thresholds
