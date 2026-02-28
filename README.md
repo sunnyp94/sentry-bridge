@@ -147,7 +147,7 @@ One-time setup (see also [docs/DEPLOY_GCP.md](docs/DEPLOY_GCP.md)):
 
 3. **GitHub repository secrets**  
    In the repo: **Settings** → **Secrets and variables** → **Actions** → **New repository secret**. Add each:
-   - **`GCP_VM_HOST`** – VM’s **External IP** from GCP Console → Compute Engine → VM instances (e.g. `34.145.173.89`).
+   - **`GCP_VM_HOST`** – VM’s **External IP** from GCP Console → Compute Engine → VM instances (e.g. `34.145.149.188`).
    - **`GCP_VM_USER`** – The Linux user you use to SSH (e.g. `ubuntu` on Ubuntu images, `sunnyakpatel` on Debian; see your SSH prompt).
    - **`GCP_SSH_PRIVATE_KEY`** – On your machine run `cat deploy_key` and paste the **entire** output (including `-----BEGIN OPENSSH PRIVATE KEY-----` and `-----END OPENSSH PRIVATE KEY-----`).
    - **`GHCR_PAT`** – A Personal Access Token with `read:packages` so the VM can pull from ghcr.io. GitHub → **Settings** (your profile) → **Developer settings** → **Personal access tokens** → generate with `read:packages`.
@@ -225,7 +225,7 @@ To verify that events (including news) flow from Go to the Python brain:
 
 ## Logging
 
-All components use structured logging with configurable levels.
+All components use structured logging with configurable levels. To stream **app.log** to Google Cloud Logs Explorer, install the Ops Agent on the VM and add a file receiver for `data/app.log`. The VM’s service account needs the **Logs Writer** role (IAM) and the VM must have **access scopes** that allow the Cloud Logging API; see [docs/OPS_AGENT_APP_LOG.md](docs/OPS_AGENT_APP_LOG.md) for steps and troubleshooting.
 
 **Go (slog):**
 - **LOG_LEVEL:** `DEBUG` | `INFO` (default) | `WARN` | `ERROR`. Reduces noise (e.g. `DEBUG` for every trade/quote).

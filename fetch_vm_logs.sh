@@ -7,7 +7,7 @@ set -e
 # Your VM (same as deploy)
 SSH_KEY="${SSH_KEY:-$HOME/deploy_key}"
 VM_USER="${VM_USER:-sunnyakpatel}"
-VM_HOST="${VM_HOST:-34.145.173.89}"
+VM_HOST="${VM_HOST:-34.145.149.188}"
 REMOTE_REPO="${REMOTE_REPO:-~/sentry-bridge}"
 REMOTE_DATA="$REMOTE_REPO/data"
 

@@ -15,7 +15,7 @@ This guide covers:
 - **Compute Engine** → **VM instances** → **Create instance**.
 - Choose **Ubuntu 22.04** or **Debian**; e2-standard-2 or e2-standard-4 recommended.
 - Allow **HTTP/HTTPS** if needed; SSH (port 22) is usually enabled by default.
-- Note the **External IP** after creation (e.g. `34.145.173.89`)—this is **GCP_VM_HOST**.
+- Note the **External IP** after creation (e.g. `34.145.149.188`)—this is **GCP_VM_HOST**. To keep the same IP across stop/start, reserve it as a **static** IP (Edit → Networking → External IPv4 → Reserve static address) before stopping the VM.
 
 ### 1.2 SSH in and install Docker
 
@@ -120,7 +120,7 @@ Note: If you use Option C, GCP’s metadata agent may overwrite `authorized_keys
 
 | Secret name | Where to get the value |
 |-------------|------------------------|
-| **GCP_VM_HOST** | GCP Console → **Compute Engine** → **VM instances** → your VM → **External IP** column (e.g. `34.145.173.89`). |
+| **GCP_VM_HOST** | GCP Console → **Compute Engine** → **VM instances** → your VM → **External IP** column (e.g. `34.145.149.188`). |
 | **GCP_VM_USER** | The Linux username you use to SSH (e.g. `ubuntu`, `sunnyakpatel`). It appears in your SSH prompt: `user@hostname`. |
 | **GCP_SSH_PRIVATE_KEY** | On your machine run `cat ~/deploy_key` and paste the **entire** output, including `-----BEGIN OPENSSH PRIVATE KEY-----` and `-----END OPENSSH PRIVATE KEY-----`. |
 | **GHCR_PAT** | GitHub → your profile **Settings** → **Developer settings** → **Personal access tokens** → create a token with **read:packages** (so the VM can pull the image from ghcr.io). Paste the token as the secret value. |
@@ -137,10 +137,10 @@ Note: If you use Option C, GCP’s metadata agent may overwrite `authorized_keys
 
 | Step | What |
 |------|------|
-| GCP_VM_HOST | Compute Engine → VM instances → External IP |
+| GCP_VM_HOST | Compute Engine → VM instances → External IP (use static IP to preserve across stop/start) |
 | GCP_VM_USER | SSH username (e.g. from prompt `user@host`) |
 | GCP_SSH_PRIVATE_KEY | Full contents of `deploy_key` (you generate it) |
 | GHCR_PAT | GitHub PAT with `read:packages` |
-| Public key | Add `deploy_key.pub` to VM `~/.ssh/authorized_keys` |
+| Public key | Add `deploy_key.pub` to VM `~/.ssh/authorized_keys` (prefer Console → VM Edit → SSH Keys so it persists) |
 
-See also the main [README](../README.md) for app configuration and local run.
+See also the main [README](../README.md) for app configuration and local run. To stream **app.log** to Cloud Logging, see [OPS_AGENT_APP_LOG.md](OPS_AGENT_APP_LOG.md) (VM needs Logs Writer role and Cloud Logging access scope).
