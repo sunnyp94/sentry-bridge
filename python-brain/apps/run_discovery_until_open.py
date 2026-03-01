@@ -118,28 +118,35 @@ def main() -> int:
     log("Eastern time; discovery %02d:%02d–%02d:%02d ET every %d min; market close %02d:%02d ET -> %s" % (
         start_et[0], start_et[1], end_et[0], end_et[1], interval_min, close_et[0], close_et[1], out_path))
 
+    from datetime import timedelta
+
+    def _next_full_trading_day_7am(now, from_tomorrow=False):
+        """First 7am ET on a full trading day (uses market_calendar). If from_tomorrow, start from tomorrow."""
+        d = (now.date() + timedelta(days=1)) if from_tomorrow else now.date()
+        while not is_full_trading_day(d):
+            d += timedelta(days=1)
+        return now.replace(year=d.year, month=d.month, day=d.day,
+                          hour=start_et[0], minute=start_et[1], second=0, microsecond=0)
+
     while True:
         now = now_et()
-        if now.weekday() >= 5:
-            log("weekend; sleeping 1h")
-            time.sleep(3600)
-            continue
+        # Single gate: full trading day only (weekends, NYSE holidays, half-days excluded via market_calendar).
         if not is_full_trading_day(now.date()):
-            log("not a full trading day; sleeping 1h")
-            time.sleep(3600)
+            next_7am = _next_full_trading_day_7am(now)
+            secs = max(0, (next_7am - now).total_seconds())
+            if secs > 0:
+                log("not a full trading day (weekend/holiday/half-day); sleeping until next full trading day %02d:%02d ET (%.0fs)" % (start_et[0], start_et[1], secs))
+                time.sleep(min(secs, 3600 * 18))
             continue
         now_min = minutes_since_midnight(now)
-        # After market close: run self-learning (strategy optimizer) once, then sleep until 7am next day.
+        # After market close: run self-learning (strategy optimizer) once, then sleep until 7am next *full trading day*.
         if now_min >= close_min:
             _run_optimizer_after_close()
-            from datetime import datetime, timedelta
-            tomorrow = (now.date() + timedelta(days=1))
-            next_7am = now.replace(year=tomorrow.year, month=tomorrow.month, day=tomorrow.day,
-                                  hour=start_et[0], minute=start_et[1], second=0, microsecond=0)
+            next_7am = _next_full_trading_day_7am(now, from_tomorrow=True)
             secs = (next_7am - now).total_seconds()
             if secs <= 0:
-                continue  # already past 7am next day (e.g. long sleep or clock skew)
-            log("market closed; sleeping until 7am ET (%.0fs)" % secs)
+                continue  # already past 7am (e.g. long sleep or clock skew)
+            log("market closed; sleeping until next full trading day %02d:%02d ET (%.0fs)" % (start_et[0], start_et[1], secs))
             time.sleep(min(secs, 3600 * 18))
             continue
         if now_min >= end_min:
@@ -150,8 +157,7 @@ def main() -> int:
             log("Watching: %s" % _read_watchlist(out_path))
             return 0
         if now_min < start_min:
-            # Sleep until discovery start (e.g. 7:00 ET); cap 1h per iteration so we re-check weekend/close
-            from datetime import datetime, timedelta
+            # Sleep until discovery start (e.g. 7:00 ET); cap 1h per iteration so we re-check full trading day
             today_start = now.replace(hour=start_et[0], minute=start_et[1], second=0, microsecond=0)
             secs = (today_start - now).total_seconds()
             if secs <= 0:

@@ -224,16 +224,16 @@ def close_all_positions_from_api() -> int:
     try:
         result = client.cancel_orders()
         if isinstance(result, list) and result:
-            log.info("flat_on_startup: cancelled %d open order(s)", len(result))
+            log.info("close_all_positions_from_api: cancelled %d open order(s)", len(result))
         elif result:
-            log.info("flat_on_startup: cancelled open orders")
+            log.info("close_all_positions_from_api: cancelled open orders")
     except Exception as e:
-        log.warning("flat_on_startup: cancel_orders failed (will still try to close positions): %s", e)
+        log.warning("close_all_positions_from_api: cancel_orders failed (will still try to close positions): %s", e)
     # Fetch current positions from API (don't rely on event payload)
     try:
         positions = client.get_all_positions()
     except Exception as e:
-        log.warning("flat_on_startup: get_all_positions failed: %s", e)
+        log.warning("close_all_positions_from_api: get_all_positions failed: %s", e)
         return 0
     if not positions or (isinstance(positions, dict) and not positions.get("positions")):
         return 0
@@ -250,18 +250,18 @@ def close_all_positions_from_api() -> int:
             client.close_position(sym)
             closed += 1
             qty = getattr(pos, "qty", None) or (pos.get("qty") if isinstance(pos, dict) else "?")
-            log.info("flat_on_startup closed %s qty=%s", sym, qty)
+            log.info("close_all_positions_from_api closed %s qty=%s", sym, qty)
         except Exception as e:
-            log.warning("flat_on_startup close %s failed: %s", sym, e)
+            log.warning("close_all_positions_from_api close %s failed: %s", sym, e)
     if closed:
-        log.info("flat_on_startup: closed %d position(s) from API", closed)
+        log.info("close_all_positions_from_api: closed %d position(s)", closed)
     return closed
 
 
-def close_all_positions(positions: List[Dict[str, Any]], reason: str = "flat_on_startup") -> int:
+def close_all_positions(positions: List[Dict[str, Any]], reason: str = "close_all") -> int:
     """
     Cancel all open orders, then place market sell for each position (from payload).
-    Prefer close_all_positions_from_api() for flat-on-startup so we don't rely on event data.
+    Prefer close_all_positions_from_api() when you need to flat from API state.
     """
     client = _client()
     if client is None or MarketOrderRequest is None or OrderSide is None or TimeInForce is None:

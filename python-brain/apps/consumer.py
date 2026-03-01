@@ -18,7 +18,7 @@ import os
 import time
 from collections import defaultdict, deque
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 _PERF = time.perf_counter
@@ -456,13 +456,13 @@ def run_stop_loss_check() -> None:
 
 
 def _is_in_health_check_window() -> bool:
-    """True if weekday ET >= PORTFOLIO_HEALTH_CHECK_ET (e.g. 16:00): close all losers, keep winners with trailing ATR."""
+    """True if full trading day ET >= PORTFOLIO_HEALTH_CHECK_ET (e.g. 16:00): close all losers, keep winners with trailing ATR."""
     check_et = getattr(brain_config, "PORTFOLIO_HEALTH_CHECK_ET", "").strip()
     if not check_et or ZoneInfo is None:
         return False
     try:
         et = datetime.now(ZoneInfo("America/New_York"))
-        if et.weekday() > 4:
+        if not is_full_trading_day(et.date()):
             return False
         parts = check_et.strip().split(":")
         if len(parts) != 2:
@@ -503,9 +503,9 @@ def run_eod_prune_if_due() -> None:
         if ZoneInfo:
             today_et = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
         else:
-            today_et = datetime.utcnow().strftime("%Y-%m-%d")
+            today_et = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     except Exception:
-        today_et = datetime.utcnow().strftime("%Y-%m-%d")
+        today_et = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if _eod_prune_done_date == today_et:
         return
     _eod_prune_done_date = today_et
@@ -644,6 +644,9 @@ def handle_event(ev: dict) -> None:
     """Update state from event and run strategy/stop-loss when relevant (news, positions)."""
     typ = ev.get("type", "?")
     payload = ev.get("payload") or {}
+    # Single gate: trading logic only on full trading days (market_calendar: weekends, holidays, half-days excluded).
+    today_et = datetime.now(ZoneInfo("America/New_York")).date() if ZoneInfo else None
+    _is_full_trading_day = today_et is not None and is_full_trading_day(today_et)
 
     if typ == "trade":
         sym = payload.get("symbol")
@@ -777,16 +780,23 @@ def handle_event(ev: dict) -> None:
         except Exception:
             pass
         t1 = _PERF()
-        run_stop_loss_check()
-        run_flat_when_daily_target()
-        run_close_losses_before_close()
-        run_portfolio_health_check()
+        if _is_full_trading_day:
+            run_stop_loss_check()
+            run_flat_when_daily_target()
+            run_close_losses_before_close()
+            run_portfolio_health_check()
+        else:
+            log.info("skip trading (stop-loss/close/health): not a full trading day (weekend/holiday/half-day)")
         stop_loss_ms = (_PERF() - t1) * 1000
         log.debug("latency step=positions get_equity_ms=%.1f stop_loss_ms=%.1f", get_equity_ms, stop_loss_ms)
     elif typ == "news":
-        run_strategy_on_news(payload)
-    # Periodic strategy run (Green Light) — not news-only; runs every STRATEGY_INTERVAL_SEC
-    _maybe_run_strategy_interval()
+        if _is_full_trading_day:
+            run_strategy_on_news(payload)
+        else:
+            log.info("skip strategy on news: not a full trading day (weekend/holiday/half-day)")
+    # Periodic strategy run (Green Light) — only on full trading days
+    if _is_full_trading_day:
+        _maybe_run_strategy_interval()
 
 
 def _run_scanner_at_startup() -> None:
@@ -888,8 +898,11 @@ def _scheduler_loop() -> None:
     while True:
         now_et = datetime.now(et)
         today_run = now_et.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if now_et >= today_run:
-            next_run = today_run + timedelta(days=1)
+        if now_et >= today_run or not is_full_trading_day(today_run.date()):
+            d = (now_et.date() + timedelta(days=1)) if now_et >= today_run else now_et.date()
+            while not is_full_trading_day(d):
+                d += timedelta(days=1)
+            next_run = datetime(d.year, d.month, d.day, hour, minute, 0, tzinfo=et)
         else:
             next_run = today_run
         sleep_secs = (next_run - now_et).total_seconds()
@@ -928,8 +941,11 @@ def _optimizer_scheduler_loop() -> None:
     while True:
         now_et = datetime.now(et)
         today_run = now_et.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if now_et >= today_run:
-            next_run = today_run + timedelta(days=1)
+        if now_et >= today_run or not is_full_trading_day(today_run.date()):
+            d = (now_et.date() + timedelta(days=1)) if now_et >= today_run else now_et.date()
+            while not is_full_trading_day(d):
+                d += timedelta(days=1)
+            next_run = datetime(d.year, d.month, d.day, hour, minute, 0, tzinfo=et)
         else:
             next_run = today_run
         sleep_secs = (next_run - now_et).total_seconds()

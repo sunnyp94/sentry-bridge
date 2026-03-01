@@ -8,7 +8,6 @@ Runs every 5 minutes in the discovery window. Scores universe by:
 Outputs a Priority Watchlist (top N) to ACTIVE_SYMBOLS_FILE for handoff to execution at 9:30.
 """
 import logging
-import os
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -46,12 +45,12 @@ def _now_et() -> Optional[datetime]:
 
 
 def _in_discovery_window(start_et: Tuple[int, int] = (8, 0), end_et: Tuple[int, int] = (9, 30), now: Optional[datetime] = None) -> bool:
-    """True if current time (ET) is in [start_et, end_et) on a weekday."""
+    """True if current time (ET) is in [start_et, end_et) on a full trading day."""
     if now is None:
         now = _now_et()
     if now is None:
         return False
-    if now.weekday() >= 5:
+    if not is_full_trading_day(now.date()):
         return False
     start_min = start_et[0] * 60 + start_et[1]
     end_min = end_et[0] * 60 + end_et[1]
@@ -160,7 +159,17 @@ class DiscoveryEngine:
         while not self._stop:
             now = datetime.now(et)
             if not is_full_trading_day(now.date()):
-                time.sleep(60)
+                d = now.date() + timedelta(days=1)
+                while not is_full_trading_day(d):
+                    d += timedelta(days=1)
+                next_start = datetime(d.year, d.month, d.day, self.start_et[0], self.start_et[1], 0, tzinfo=et)
+                secs = max(0, (next_start - now).total_seconds())
+                if secs > 0:
+                    log.info("discovery: not a full trading day (weekend/holiday/half-day); next window %s %02d:%02d ET (sleep %.0fs)",
+                             d.isoformat(), self.start_et[0], self.start_et[1], secs)
+                    time.sleep(min(secs, 300))
+                else:
+                    time.sleep(60)
                 continue
             start_min = self.start_et[0] * 60 + self.start_et[1]
             end_min = self.end_et[0] * 60 + self.end_et[1]
@@ -172,8 +181,10 @@ class DiscoveryEngine:
                     time.sleep(min(secs, 60))
                 continue
             if now_min >= end_min:
-                tomorrow = (now.date() + timedelta(days=1))
-                next_start = datetime(tomorrow.year, tomorrow.month, tomorrow.day, self.start_et[0], self.start_et[1], 0, tzinfo=et)
+                d = now.date() + timedelta(days=1)
+                while not is_full_trading_day(d):
+                    d += timedelta(days=1)
+                next_start = datetime(d.year, d.month, d.day, self.start_et[0], self.start_et[1], 0, tzinfo=et)
                 secs = (next_start - now).total_seconds()
                 if secs > 0:
                     time.sleep(min(secs, 300))
