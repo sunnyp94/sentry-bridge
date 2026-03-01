@@ -13,8 +13,11 @@ if [ -n "$ACTIVE_SYMBOLS_FILE" ]; then
       echo "[entrypoint] engine exited; next: discovery will sleep until 7am ET then run 7–9:30"
     done
   else
-    echo "[entrypoint] running scanner -> $ACTIVE_SYMBOLS_FILE"
-    cd /app && python3 /app/python-brain/apps/run_screener.py --out "$ACTIVE_SYMBOLS_FILE" || true
+    echo "[entrypoint] scanner (full trading days only); then engine"
+    cd /app && python3 /app/python-brain/apps/run_screener.py --out "$ACTIVE_SYMBOLS_FILE" --wait || exit 1
+    echo "[entrypoint] scanner done; starting engine"
+    exec "$@"
+    exit 1
   fi
 fi
 exec "$@"

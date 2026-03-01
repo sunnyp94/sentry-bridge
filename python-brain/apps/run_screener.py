@@ -9,12 +9,16 @@ it only runs strategy (and trades) for symbols in that list.
 Run daily (e.g. cron at market open or 8am ET):
   python3 apps/run_screener.py [--universe r2000_sp500_nasdaq100] [--top 5] [--out data/active_symbols.txt]
 
-Without --out, prints symbols to stdout. With --out or ACTIVE_SYMBOLS_FILE, writes the pool file.
+With --wait (used by entrypoint): on non-trading days do not write a file or start the engine;
+instead block and sleep until next full trading day 7am ET with clear logs. Engine only starts
+after scanner runs on a full trading day.
 """
 import argparse
 import logging
 import os
 import sys
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # So brain.data get_bars debug logs are visible (e.g. in Docker)
@@ -29,6 +33,23 @@ from brain.data import get_bars, get_bars_chunked
 from brain.screener import get_universe, score_universe
 from brain.market_calendar import is_full_trading_day
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
+
+
+def _next_full_trading_day_7am_et():
+    """Return (datetime of next 7am ET on a full trading day, tz ET) or None if zoneinfo missing."""
+    if ZoneInfo is None:
+        return None
+    et = ZoneInfo("America/New_York")
+    now = datetime.now(et)
+    d = now.date()
+    while not is_full_trading_day(d):
+        d += timedelta(days=1)
+    return now.replace(year=d.year, month=d.month, day=d.day, hour=7, minute=0, second=0, microsecond=0)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Screen universe for Z/volume/OFI opportunities; output top N symbols")
@@ -40,6 +61,7 @@ def main() -> int:
     parser.add_argument("--vol-pct", type=float, default=None, help="Volume spike %% vs 20d avg (default 15)")
     parser.add_argument("--chunk-size", type=int, default=None, help="Bar fetch chunk size for large universes (default from config or 100)")
     parser.add_argument("--chunk-delay", type=float, default=None, help="Seconds between bar chunks (default from config or 0.5)")
+    parser.add_argument("--wait", action="store_true", help="When not a full trading day, sleep until next 7am ET (do not write file or start engine)")
     args = parser.parse_args()
 
     universe_name = args.universe or getattr(brain_config, "SCREENER_UNIVERSE", "r2000_sp500_nasdaq100")
@@ -58,9 +80,22 @@ def main() -> int:
     chunk_size = args.chunk_size if args.chunk_size is not None else chunk_size
     chunk_delay = args.chunk_delay if args.chunk_delay is not None else chunk_delay
 
-    # Only fetch bars and score on full trading days (weekends, holidays, half-days: write fallback and exit).
-    if not is_full_trading_day():
-        print("[SCANNER] not a full trading day (weekend/holiday/half-day); skipping bar fetch, writing fallback list", file=sys.stderr)
+    # On non-full trading days: --wait = block and sleep (no file, engine won't start); else write fallback for manual/cron use.
+    while not is_full_trading_day():
+        if args.wait:
+            next_7am = _next_full_trading_day_7am_et()
+            if next_7am is None:
+                print("[SCANNER] App sleeping (not a full trading day) but zoneinfo missing; sleeping 1h", file=sys.stderr)
+                time.sleep(3600)
+                continue
+            now = datetime.now(next_7am.tzinfo)
+            secs = max(0, (next_7am - now).total_seconds())
+            if secs > 0:
+                print("[SCANNER] App sleeping — not a full trading day (weekend/holiday/half-day). Next run: %s 07:00 ET (in %.0fs)" % (next_7am.date().isoformat(), secs), file=sys.stderr)
+                time.sleep(min(secs, 3600 * 18))
+            continue
+        # No --wait: write fallback and exit (e.g. manual/cron run on a Sunday).
+        print("[SCANNER] Not a full trading day; skipping bar fetch, writing fallback list (no --wait)", file=sys.stderr)
         active = universe[:top_n]
         out_path = args.out or getattr(brain_config, "ACTIVE_SYMBOLS_FILE", "").strip()
         if out_path:
