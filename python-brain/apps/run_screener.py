@@ -27,6 +27,7 @@ if str(_root) not in sys.path:
 from brain import config as brain_config
 from brain.data import get_bars, get_bars_chunked
 from brain.screener import get_universe, score_universe
+from brain.market_calendar import is_full_trading_day
 
 
 def main() -> int:
@@ -56,6 +57,22 @@ def main() -> int:
     parallel = getattr(brain_config, "SCREENER_PARALLEL_CHUNKS", 1)
     chunk_size = args.chunk_size if args.chunk_size is not None else chunk_size
     chunk_delay = args.chunk_delay if args.chunk_delay is not None else chunk_delay
+
+    # Only fetch bars and score on full trading days (weekends, holidays, half-days: write fallback and exit).
+    if not is_full_trading_day():
+        print("[SCANNER] not a full trading day (weekend/holiday/half-day); skipping bar fetch, writing fallback list", file=sys.stderr)
+        active = universe[:top_n]
+        out_path = args.out or getattr(brain_config, "ACTIVE_SYMBOLS_FILE", "").strip()
+        if out_path:
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w") as f:
+                for s in active:
+                    f.write(s + "\n")
+            print("Wrote %d symbols (fallback) to %s" % (len(active), out_path), file=sys.stderr)
+        else:
+            for s in active:
+                print(s)
+        return 0
 
     # Large universes: fetch bars in chunks to stay under Alpaca rate limits (e.g. 10k/min)
     if len(universe) > chunk_size:
