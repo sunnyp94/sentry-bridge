@@ -194,7 +194,8 @@ class DiscoveryEngine:
             except Exception as e:
                 log.exception("discovery run failed: %s", e)
             elapsed = (now_min - start_min) * 60 + now.second
-            next_in = self.interval_sec - (elapsed % self.interval_sec)
+            interval = max(60, self.interval_sec)  # avoid ZeroDivisionError if interval_sec is 0
+            next_in = interval - (elapsed % interval)
             if next_in <= 0:
-                next_in = self.interval_sec
-            time.sleep(min(next_in, self.interval_sec))
+                next_in = interval
+            time.sleep(min(next_in, interval))

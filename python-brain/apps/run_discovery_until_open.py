@@ -108,7 +108,7 @@ def main() -> int:
 
     start_min = start_et[0] * 60 + start_et[1]
     end_min = end_et[0] * 60 + end_et[1]
-    interval_sec = interval_min * 60
+    interval_sec = max(60, int(interval_min) * 60)  # avoid ZeroDivisionError if interval_min is 0
     close_et = _parse_et_time(getattr(brain_config, "MARKET_CLOSE_ET", "16:00"))
     close_min = close_et[0] * 60 + close_et[1]
 

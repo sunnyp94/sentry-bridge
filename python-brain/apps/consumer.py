@@ -992,7 +992,7 @@ def main() -> None:
             engine = DiscoveryEngine(
                 start_et=start_et,
                 end_et=end_et,
-                interval_sec=interval_min * 60,
+                interval_sec=max(60, int(interval_min) * 60),  # avoid 0 (causes ZeroDivisionError in loop)
                 top_n=getattr(brain_config, "DISCOVERY_TOP_N", 10),
             )
             threading.Thread(target=engine.run_loop, daemon=True).start()
