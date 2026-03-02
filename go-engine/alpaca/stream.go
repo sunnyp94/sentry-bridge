@@ -88,9 +88,14 @@ func (p *PriceStream) Run() error {
 
 	slog.Info("price stream connected", "url", url, "symbols", p.symbols)
 
-	// Keepalive: send ping every 2 min so server is less likely to close the connection (e.g. 1006/EOF every ~5 min).
+	// Keepalive: send ping every 60s so Alpaca (or LB) doesn't close the connection (~5 min 1006/EOF is common otherwise).
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		return nil
+	})
+	conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 	go func() {
-		ticker := time.NewTicker(2 * time.Minute)
+		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
@@ -107,6 +112,7 @@ func (p *PriceStream) Run() error {
 		if err != nil {
 			return fmt.Errorf("read: %w", err)
 		}
+		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		if err := p.handleMessage(data); err != nil {
 			slog.Error("stream handle message", "err", err)
 		}
