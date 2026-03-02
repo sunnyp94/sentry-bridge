@@ -165,7 +165,9 @@ def main() -> int:
             log("sleeping until %02d:%02d ET (%.0fs)" % (start_et[0], start_et[1], secs))
             time.sleep(min(secs, 3600))
             continue
-        # In window [start_et, 9:30): run discovery every 5 min
+        # In window [start_et, 9:30): run discovery every 5 min (on the clock :00, :05, :10, ... ET)
+        log("Discovery run at %02d:%02d ET (every %d min until %02d:%02d)" % (
+            now.hour, now.minute, interval_min, end_et[0], end_et[1]))
         log("Running discovery (fetching bars, scoring)...")
         try:
             run_discovery(top_n=top_n, out_path=out_path)
@@ -195,7 +197,8 @@ def main() -> int:
             _verify_handoff_file(out_path)
             log("Watching: %s" % _read_watchlist(out_path))
             return 0
-        log("Discovery done; next run in %ds" % next_in)
+        next_run_at = now + timedelta(seconds=next_in)
+        log("Discovery done; next run at %02d:%02d ET (in %ds)" % (next_run_at.hour, next_run_at.minute, next_in))
         time.sleep(min(next_in, interval_sec))
 
 
