@@ -977,10 +977,9 @@ def main() -> None:
                     discovery_parse_et(getattr(brain_config, "DISCOVERY_END_ET", "09:30")),
                 ):
                     run_discovery(top_n=getattr(brain_config, "DISCOVERY_TOP_N", 10))
-                else:
-                    # Run in background so we don't block stdin loop (scanner can take 2–5 min).
-                    threading.Thread(target=_run_scanner_at_startup, daemon=True).start()
+                # Else: discovery just handed off the file at 9:30; do not run scanner and overwrite it.
             else:
+                # Scanner-only mode: refresh opportunity pool at startup.
                 threading.Thread(target=_run_scanner_at_startup, daemon=True).start()
         if path and run_at_et and _parse_run_at_et(run_at_et):
             t = threading.Thread(target=_scheduler_loop, daemon=True)
