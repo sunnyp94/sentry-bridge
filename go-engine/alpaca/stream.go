@@ -88,6 +88,20 @@ func (p *PriceStream) Run() error {
 
 	slog.Info("price stream connected", "url", url, "symbols", p.symbols)
 
+	// Keepalive: send ping every 2 min so server is less likely to close the connection (e.g. 1006/EOF every ~5 min).
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {

@@ -1,23 +1,13 @@
 #!/bin/sh
-# When DISCOVERY_ENABLED=true: loop (discovery 7:00–9:30 ET → engine 9:30–4pm ET → sleep until 7am). Engine exits at 4pm; discovery sleeps overnight and weekends.
-# Else when ACTIVE_SYMBOLS_FILE is set: run scanner once, then start the Go engine.
-# Go reads tickers from ACTIVE_SYMBOLS_FILE at startup.
+# Discovery mode (ACTIVE_SYMBOLS_FILE = path to watchlist): On every full market open day, discovery runs 7:00–9:30 ET every 5 min and writes the priority watchlist. If the next run would be after 9:30 ET, the app uses the ACTIVE_SYMBOLS_FILE it last wrote. At 9:30 ET the engine starts with that file; at 4pm ET it exits; then we sleep until 7am next full trading day.
 if [ -n "$ACTIVE_SYMBOLS_FILE" ]; then
-  if [ "$DISCOVERY_ENABLED" = "true" ] || [ "$DISCOVERY_ENABLED" = "1" ]; then
-    echo "[entrypoint] discovery 7:00–9:30 ET; engine 9:30–4pm ET; then sleep until 7am (idle weekends)"
-    cd /app
-    while true; do
-      python3 /app/python-brain/apps/run_discovery_until_open.py || exit 1
-      echo "[entrypoint] starting engine (exits at 4pm ET)"
-      "$@" || exit 1
-      echo "[entrypoint] engine exited; next: discovery will sleep until 7am ET then run 7–9:30"
-    done
-  else
-    echo "[entrypoint] scanner (full trading days only); then engine"
-    cd /app && python3 /app/python-brain/apps/run_screener.py --out "$ACTIVE_SYMBOLS_FILE" --wait || exit 1
-    echo "[entrypoint] scanner done; starting engine"
-    exec "$@"
-    exit 1
-  fi
+  echo "[entrypoint] discovery 7:00–9:30 ET (every 5 min on full market days); engine 9:30–4pm ET; sleep until 7am"
+  cd /app
+  while true; do
+    python3 /app/python-brain/apps/run_discovery_until_open.py || exit 1
+    echo "[entrypoint] starting engine (exits at 4pm ET)"
+    "$@" || exit 1
+    echo "[entrypoint] engine exited; next: discovery will sleep until 7am ET then run 7–9:30"
+  done
 fi
 exec "$@"

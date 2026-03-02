@@ -189,6 +189,8 @@ class DiscoveryEngine:
                 if secs > 0:
                     time.sleep(min(secs, 300))
                 continue
+            log.info("discovery: run at %02d:%02d ET (every %d min until %02d:%02d)",
+                     now.hour, now.minute, self.interval_sec // 60, self.end_et[0], self.end_et[1])
             try:
                 run_discovery(top_n=self.top_n)
             except Exception as e:

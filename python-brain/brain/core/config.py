@@ -178,7 +178,7 @@ ACTIVE_SYMBOLS_FILE = os.environ.get("ACTIVE_SYMBOLS_FILE", "").strip()
 SCREENER_RUN_AT_ET = os.environ.get("SCREENER_RUN_AT_ET", "09:30").strip()
 
 # -----------------------------------------------------------------------------
-# Two-Stage: Discovery (7:00–9:30 ET) → Execution (9:30+)
+# Two-Stage: Discovery (7:00–9:30 ET) → Execution (9:30+). Discovery is always on (not from .env).
 # -----------------------------------------------------------------------------
 DISCOVERY_ENABLED = True
 DISCOVERY_START_ET = os.environ.get("DISCOVERY_START_ET", "07:00").strip()

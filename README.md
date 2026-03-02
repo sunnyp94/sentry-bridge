@@ -13,7 +13,7 @@ Sentry Bridge is an **automated trading system** that streams market data from *
 
 ### Discovery and opportunity engine
 
-- **Pre-market discovery** (7:00–9:30 ET) – On full market days, a screener runs every 5 minutes and writes a **priority watchlist** to `ACTIVE_SYMBOLS_FILE`. At 9:30 ET the Go engine starts with that list. Enable with `DISCOVERY_ENABLED=true` and `ACTIVE_SYMBOLS_FILE`.
+- **Pre-market discovery** (7:00–9:30 ET) – On every full market open day, discovery runs from 7:00 AM to 9:30 AM Eastern every 5 minutes and writes a **priority watchlist** to `ACTIVE_SYMBOLS_FILE`. If the next run would be after 9:30 AM Eastern, the app uses the file it last wrote. At 9:30 ET the Go engine starts with that list.
 - **One-shot scanner** – Alternatively, a Z-score and volume-spike screener can run once at container start or on a schedule (no discovery window).
 
 ### Strategy brain (Python)
