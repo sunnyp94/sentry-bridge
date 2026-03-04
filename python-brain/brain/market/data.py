@@ -113,10 +113,24 @@ def get_bars(symbols: List[str], days: int) -> Dict[str, pd.DataFrame]:
         feed=feed,
     )
     _log.info("get_bars: request symbols=%s days=%d start=%s end=%s feed=%s", symbols[:5], days, start.isoformat(), end.isoformat(), feed)
-    try:
-        bars = client.get_stock_bars(req)
-    except Exception as e:
-        _log.warning("get_bars: Alpaca API error: %s", e)
+    last_err = None
+    bars = None
+    for attempt in range(3):
+        try:
+            bars = client.get_stock_bars(req)
+            break
+        except Exception as e:
+            last_err = e
+            err_str = str(e).lower()
+            if "429" in str(e) or "rate" in err_str or "too many" in err_str:
+                wait = (attempt + 1) * 5.0
+                _log.warning("get_bars: rate limit (attempt %d/3), sleeping %.0fs: %s", attempt + 1, wait, e)
+                time.sleep(wait)
+            else:
+                _log.warning("get_bars: Alpaca API error: %s", e)
+                return {}
+    else:
+        _log.warning("get_bars: Alpaca API error after retries: %s", last_err)
         return {}
     if bars is None:
         _log.warning("get_bars: Alpaca returned None")

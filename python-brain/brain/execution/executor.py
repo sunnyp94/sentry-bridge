@@ -15,13 +15,15 @@ log = logging.getLogger("brain.executor")
 
 try:
     from alpaca.trading.client import TradingClient
-    from alpaca.trading.enums import OrderSide, TimeInForce
-    from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
+    from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
+    from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, GetOrdersRequest
 except ImportError:
     TradingClient = None
     MarketOrderRequest = None
     LimitOrderRequest = None
     OrderSide = TimeInForce = None
+    QueryOrderStatus = None
+    GetOrdersRequest = None
 
 
 def _client():
@@ -75,6 +77,29 @@ def get_account_equity() -> Optional[float]:
             time.sleep(1.0)
     log.error("get_account_equity: failed after 3 attempts. Last error: %s", last_error)
     return None
+
+
+def _cancel_open_orders_for_symbol(client: Any, symbol: str) -> int:
+    """Cancel all open orders for the given symbol. Returns number cancelled. Used when wash-trade reject blocks a sell."""
+    if GetOrdersRequest is None or QueryOrderStatus is None:
+        return 0
+    try:
+        req = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+        orders = client.get_orders(req)
+        if not orders:
+            return 0
+        n = 0
+        for order in orders:
+            try:
+                client.cancel_order_by_id(order.id)
+                n += 1
+                log.info("cancel_order_by_id %s order=%s (wash-trade unblock)", symbol, order.id)
+            except Exception as e:
+                log.warning("cancel_order_by_id %s %s failed: %s", symbol, order.id, e)
+        return n
+    except Exception as e:
+        log.warning("_cancel_open_orders_for_symbol %s failed: %s", symbol, e)
+        return 0
 
 
 def _get_latest_quote_price(symbol: str) -> Optional[float]:
@@ -150,7 +175,7 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
     log.info("place_order %s %s qty=%d price=%s", decision.action.upper(), decision.symbol, qty, price_str)
     side = OrderSide.BUY if decision.action == "buy" else OrderSide.SELL
     use_limit = config.USE_LIMIT_ORDERS and current_price is not None and current_price > 0 and LimitOrderRequest is not None
-    try:
+    def _submit() -> bool:
         t0 = time.perf_counter()
         if use_limit:
             bps = config.LIMIT_ORDER_OFFSET_BPS
@@ -184,7 +209,34 @@ def place_order(decision: Decision, current_price: Optional[float] = None) -> bo
                 (time.perf_counter() - t0) * 1000, decision.action.upper(), qty, decision.symbol, getattr(order, "id", "?"),
             )
         return True
+
+    try:
+        return _submit()
     except Exception as e:
+        err_str = str(e).lower()
+        # Long exit (sell) blocked by existing buy order, or short exit (buy to cover) blocked by existing sell order
+        sell_blocked_by_buy = (
+            decision.action == "sell"
+            and ("wash" in err_str or "existing_order_id" in str(e) or "buy order exists" in err_str)
+        )
+        buy_blocked_by_sell = (
+            decision.action == "buy"
+            and ("wash" in err_str or "existing_order_id" in str(e) or "sell order exists" in err_str)
+        )
+        is_wash_reject = sell_blocked_by_buy or buy_blocked_by_sell
+        if is_wash_reject:
+            cancelled = _cancel_open_orders_for_symbol(client, decision.symbol)
+            log.info(
+                "place_order wash-trade reject: cancelled %d open order(s) for %s, retrying %s once",
+                cancelled,
+                decision.symbol,
+                decision.action.upper(),
+            )
+            try:
+                return _submit()
+            except Exception as e2:
+                log.exception("place_order retry after cancel failed: %s", e2)
+                return False
         log.exception("order failed: %s", e)
         return False
 

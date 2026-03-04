@@ -58,16 +58,31 @@ func (c *TradingClient) do(method, path string) ([]byte, error) {
 	}
 	req.Header.Set("APCA-API-KEY-ID", c.keyID)
 	req.Header.Set("APCA-API-SECRET-KEY", c.secretKey)
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
+	var body []byte
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return body, nil
+		}
+		if resp.StatusCode == 429 && attempt < 2 {
+			backoff := time.Duration(5*(attempt+1)) * time.Second
+			if ra := resp.Header.Get("Retry-After"); ra != "" {
+				if sec, err := strconv.Atoi(ra); err == nil && sec > 0 && sec <= 60 {
+					backoff = time.Duration(sec) * time.Second
+				}
+			}
+			time.Sleep(backoff)
+			continue
+		}
 		return nil, fmt.Errorf("trading API %s %s: %s (status %d)", method, path, string(body), resp.StatusCode)
 	}
-	return body, nil
+	// Unreachable: loop always returns on success or non-429 or last attempt
+	return nil, fmt.Errorf("trading API %s %s: %s (status 429)", method, path, string(body))
 }
 
 // Position is a single position from GET /v2/positions.

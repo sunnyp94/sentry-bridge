@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -44,19 +45,35 @@ func (c *Client) do(method, path string, params url.Values) ([]byte, error) {
 	}
 	req.Header.Set("APCA-API-KEY-ID", c.keyID)
 	req.Header.Set("APCA-API-SECRET-KEY", c.secretKey)
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
+	var body []byte
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusOK {
+			return body, nil
+		}
+		if resp.StatusCode == 429 && attempt < 2 {
+			backoff := time.Duration(5*(attempt+1)) * time.Second
+			// Optional: respect Retry-After header if present
+			if ra := resp.Header.Get("Retry-After"); ra != "" {
+				if sec, err := strconv.Atoi(ra); err == nil && sec > 0 && sec <= 60 {
+					backoff = time.Duration(sec) * time.Second
+				}
+			}
+			time.Sleep(backoff)
+			continue
+		}
 		return nil, fmt.Errorf("alpaca API %s %s: %s (status %d)", method, path, string(body), resp.StatusCode)
 	}
-	return body, nil
+	// Unreachable: loop always returns on success or non-429 or last attempt
+	return nil, fmt.Errorf("alpaca API %s %s: %s (status 429)", method, path, string(body))
 }
 
 // NewsArticle is a single news item from Alpaca.
