@@ -108,7 +108,7 @@ KILL_SWITCH_RETURN_THRESHOLD = _float("KILL_SWITCH_RETURN_THRESHOLD", "-0.05")
 # -----------------------------------------------------------------------------
 # Stop loss and take profit
 # -----------------------------------------------------------------------------
-STOP_LOSS_PCT = _float("STOP_LOSS_PCT", "1.0")
+STOP_LOSS_PCT = _float("STOP_LOSS_PCT", "1.75")
 TAKE_PROFIT_PCT = _float("TAKE_PROFIT_PCT", "2.0")
 
 # -----------------------------------------------------------------------------
@@ -155,7 +155,7 @@ TRAILING_ATR_MULTIPLE = _float("TRAILING_ATR_MULTIPLE", "1.5")
 # -----------------------------------------------------------------------------
 STRUCTURE_EMA_PERIOD = _int("STRUCTURE_EMA_PERIOD", "50")
 CONFLUENCE_Z_MAX = _float("CONFLUENCE_Z_MAX", "0.5")
-TAKE_PROFIT_R_MULTIPLE = _float("TAKE_PROFIT_R_MULTIPLE", "1.2")
+TAKE_PROFIT_R_MULTIPLE = _float("TAKE_PROFIT_R_MULTIPLE", "2.5")
 RSI_OVERBOUGHT = _float("RSI_OVERBOUGHT", "80")
 RSI_OVERBOUGHT_OFI_MIN = _float("RSI_OVERBOUGHT_OFI_MIN", "0.10")
 TECHNICAL_MIN_FOR_ENTRY = _float("TECHNICAL_MIN_FOR_ENTRY", "-0.35")
@@ -187,7 +187,7 @@ DISCOVERY_INTERVAL_MIN = _int("DISCOVERY_INTERVAL_MIN", "5")
 DISCOVERY_TOP_N = _int("DISCOVERY_TOP_N", "10")
 MARKET_CLOSE_ET = os.environ.get("MARKET_CLOSE_ET", "16:00").strip()
 TWO_STAGE_ENTRY_ATR_BELOW_VWAP = _float("TWO_STAGE_ENTRY_ATR_BELOW_VWAP", "1.0")
-SCALE_OUT_50_AT_VWAP = True
+SCALE_OUT_50_AT_VWAP = False
 PORTFOLIO_HEALTH_CHECK_ET = os.environ.get("PORTFOLIO_HEALTH_CHECK_ET", "16:00").strip()
 
 # -----------------------------------------------------------------------------

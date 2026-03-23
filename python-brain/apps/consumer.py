@@ -200,6 +200,12 @@ _vwap_trades_by_symbol: dict[str, deque] = defaultdict(lambda: deque(maxlen=500)
 _last_equity: Optional[float] = None
 # EOD prune: run once per calendar day (ET) at 15:50
 _eod_prune_done_date: Optional[str] = None
+# Daily equity snapshots: record open (9:30 ET) and close (16:00 ET) equity once per calendar day
+# so we can compute daily return and compare to SPY. Grep: "daily_snapshot"
+_daily_snapshot_date: Optional[str] = None
+_daily_open_equity: Optional[float] = None
+_daily_snapshot_open_logged: bool = False
+_daily_snapshot_close_logged: bool = False
 
 
 def _get_vwap(symbol: str) -> Optional[float]:
@@ -640,6 +646,42 @@ def run_strategy_on_news(payload: dict) -> None:
     set_kill_switch_from_news(raw_news)
 
 
+def _log_daily_equity_snapshot(eq: float) -> None:
+    """Log open/close equity once per trading day for daily P&L benchmarking. Grep 'daily_snapshot'."""
+    global _daily_snapshot_date, _daily_open_equity, _daily_snapshot_open_logged, _daily_snapshot_close_logged
+    if ZoneInfo is None or eq <= 0:
+        return
+    now = datetime.now(ZoneInfo("America/New_York"))
+    date_str = now.date().isoformat()
+    now_min = now.hour * 60 + now.minute
+
+    # Reset on new calendar day
+    if _daily_snapshot_date != date_str:
+        _daily_snapshot_date = date_str
+        _daily_open_equity = None
+        _daily_snapshot_open_logged = False
+        _daily_snapshot_close_logged = False
+
+    # Market open snapshot: first equity read at or after 9:30 ET
+    if not _daily_snapshot_open_logged and now_min >= 9 * 60 + 30:
+        _daily_open_equity = eq
+        _daily_snapshot_open_logged = True
+        log.info("daily_snapshot date=%s type=open equity=%.2f", date_str, eq)
+
+    # Market close snapshot: first equity read at or after 16:00 ET; log daily return vs open
+    if not _daily_snapshot_close_logged and now_min >= 16 * 60:
+        _daily_snapshot_close_logged = True
+        if _daily_open_equity and _daily_open_equity > 0:
+            daily_ret_pct = (eq - _daily_open_equity) / _daily_open_equity * 100
+            log.info(
+                "daily_snapshot date=%s type=close equity=%.2f open=%.2f daily_pct=%.4f%%"
+                " — compare to SPY daily pct to benchmark",
+                date_str, eq, _daily_open_equity, daily_ret_pct,
+            )
+        else:
+            log.info("daily_snapshot date=%s type=close equity=%.2f (no open snapshot this day)", date_str, eq)
+
+
 def handle_event(ev: dict) -> None:
     """Update state from event and run strategy/stop-loss when relevant (news, positions)."""
     typ = ev.get("type", "?")
@@ -777,6 +819,7 @@ def handle_event(ev: dict) -> None:
                 _last_equity = eq
                 update_equity(eq)
                 update_drawdown_peak(eq)
+                _log_daily_equity_snapshot(eq)
         except Exception:
             pass
         t1 = _PERF()
