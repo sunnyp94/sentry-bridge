@@ -29,13 +29,13 @@ def _int(name: str, default: str) -> int:
 # -----------------------------------------------------------------------------
 # Daily profit target: soft-cap trailing stop
 # -----------------------------------------------------------------------------
-DAILY_CAP_ENABLED = True
-DAILY_PROFIT_TARGET_PCT = 0.5
-DAILY_CAP_PCT = 0.5
-SOFT_CAP_TRAILING_PCT = 0.1
-DAILY_LOSS_CAP_PCT = _float("DAILY_LOSS_CAP_PCT", "1.0")
-DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT = _float("DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT", "5.0")
-FLAT_WHEN_DAILY_TARGET_HIT = False  # let winners run; only stop new buys when target hit
+DAILY_CAP_ENABLED = False           # disabled: TP is now 4.375%, cap was firing after a single winning trade
+DAILY_PROFIT_TARGET_PCT = 2.0       # kept for reference; not active while DAILY_CAP_ENABLED=False
+DAILY_CAP_PCT = 2.0
+SOFT_CAP_TRAILING_PCT = 0.5
+DAILY_LOSS_CAP_PCT = _float("DAILY_LOSS_CAP_PCT", "1.0")       # still active: stop new buys if down -1% on the day
+DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT = _float("DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT", "5.0")  # still active
+FLAT_WHEN_DAILY_TARGET_HIT = False
 
 # -----------------------------------------------------------------------------
 # Buy thresholds
@@ -86,8 +86,8 @@ TREND_SMA_PERIOD = _int("TREND_SMA_PERIOD", "20")
 # -----------------------------------------------------------------------------
 # Kill switch
 # -----------------------------------------------------------------------------
-KILL_SWITCH_SENTIMENT_THRESHOLD = _float("KILL_SWITCH_SENTIMENT_THRESHOLD", "-0.50")
-KILL_SWITCH_RETURN_THRESHOLD = _float("KILL_SWITCH_RETURN_THRESHOLD", "-0.05")
+KILL_SWITCH_SENTIMENT_THRESHOLD = _float("KILL_SWITCH_SENTIMENT_THRESHOLD", "-0.80")  # was -0.50; only extreme panic news
+KILL_SWITCH_RETURN_THRESHOLD = _float("KILL_SWITCH_RETURN_THRESHOLD", "-0.15")         # was -0.05; per-symbol 1m/5m return — -15% = circuit-breaker level
 
 # -----------------------------------------------------------------------------
 # Stop loss and take profit

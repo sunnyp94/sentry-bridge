@@ -55,12 +55,15 @@ def is_daily_cap_reached() -> bool:
         return False
     pct = (_current_equity - _start_equity) / _start_equity
 
-    # Daily loss cap and circuit breaker: no new buys when down too much for the day (death-spiral protection)
+    # Daily loss cap: stop new buys when down DAILY_LOSS_CAP_PCT (e.g. -1%). Most restrictive check first.
     loss_cap = getattr(config, "DAILY_LOSS_CAP_PCT", 0)
+    if loss_cap > 0 and pct <= -loss_cap / 100.0:
+        log.info("daily_loss_cap: pnl_pct=%.2f%% <= -%.2f%% (pause new buys)", pct * 100, loss_cap)
+        return True
+    # Circuit breaker: harder stop if down DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT (e.g. -5%). Separate from loss cap.
     circuit_breaker = getattr(config, "DAILY_DRAWDOWN_CIRCUIT_BREAKER_PCT", 5.0)
-    loss_thresh = max(loss_cap, circuit_breaker) if loss_cap > 0 else circuit_breaker
-    if loss_thresh > 0 and pct <= -loss_thresh / 100.0:
-        log.info("daily_loss_cap/circuit_breaker: pnl_pct=%.2f%% <= -%.2f%% (pause all trading)", pct * 100, loss_thresh)
+    if circuit_breaker > 0 and pct <= -circuit_breaker / 100.0:
+        log.info("daily_circuit_breaker: pnl_pct=%.2f%% <= -%.2f%% (pause all trading)", pct * 100, circuit_breaker)
         return True
 
     # Soft-cap trailing stop: activation threshold and trail from config (code defaults 0.5% and 0.1%)
