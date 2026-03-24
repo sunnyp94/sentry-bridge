@@ -41,16 +41,7 @@ FLAT_WHEN_DAILY_TARGET_HIT = False  # let winners run; only stop new buys when t
 # Buy thresholds
 # -----------------------------------------------------------------------------
 SENTIMENT_EMA_ALPHA = _float("SENTIMENT_EMA_ALPHA", "0.35")
-SENTIMENT_BUY_THRESHOLD = _float("SENTIMENT_BUY_THRESHOLD", "0.10")
-SENTIMENT_BUY_MIN_CONFIDENCE = _float("SENTIMENT_BUY_MIN_CONFIDENCE", "0.18")
 PROB_GAIN_THRESHOLD = _float("PROB_GAIN_THRESHOLD", "0.12")
-
-# -----------------------------------------------------------------------------
-# Sell thresholds (reserved for plug-in)
-# -----------------------------------------------------------------------------
-EXIT_ONLY_STOP_AND_TP = True
-SENTIMENT_SELL_THRESHOLD = _float("SENTIMENT_SELL_THRESHOLD", "-0.32")
-PROB_GAIN_SELL_THRESHOLD = _float("PROB_GAIN_SELL_THRESHOLD", "0.32")
 
 # -----------------------------------------------------------------------------
 # Sizing and session
@@ -61,9 +52,6 @@ POSITION_SIZE_PCT = _float("POSITION_SIZE_PCT", "0.05")
 STRATEGY_REGULAR_SESSION_ONLY = True
 ORDER_COOLDOWN_SEC = _int("ORDER_COOLDOWN_SEC", "30")
 STRATEGY_INTERVAL_SEC = _int("STRATEGY_INTERVAL_SEC", "45")
-CORRELATION_CHECK_ENABLED = False
-CORRELATION_THRESHOLD = _float("CORRELATION_THRESHOLD", "0.7")
-CORRELATION_SIZE_REDUCTION = _float("CORRELATION_SIZE_REDUCTION", "0.5")
 
 # -----------------------------------------------------------------------------
 # Limit orders
@@ -90,14 +78,10 @@ USE_PATTERNS = True
 PATTERN_LOOKBACK = _int("PATTERN_LOOKBACK", "40")
 
 # -----------------------------------------------------------------------------
-# Trend filter and Regime
+# Trend filter
 # -----------------------------------------------------------------------------
 TREND_FILTER_ENABLED = True
 TREND_SMA_PERIOD = _int("TREND_SMA_PERIOD", "20")
-REGIME_FILTER_ENABLED = True
-REGIME_LOOKBACK = _int("REGIME_LOOKBACK", "20")
-REGIME_TREND_SMA_PERIOD = _int("REGIME_TREND_SMA_PERIOD", "20")
-REGIME_VOLATILITY_PCT = _float("REGIME_VOLATILITY_PCT", "70")
 
 # -----------------------------------------------------------------------------
 # Kill switch
@@ -145,9 +129,9 @@ MICROSTRUCTURE_ENTRY_MODE = True
 USE_OFI = True
 OFI_SURGE_FOR_ENTRY = _float("OFI_SURGE_FOR_ENTRY", "0.0")
 OFI_WINDOW_TRADES = _int("OFI_WINDOW_TRADES", "100")
-TAKE_PROFIT_AT_VWAP = True
-BREAKEVEN_AT_HALFWAY_TO_VWAP = True
-TRAILING_ATR_ABOVE_VWAP = True
+TAKE_PROFIT_AT_VWAP = False        # disabled: entry allows price >= VWAP, so this would exit immediately
+BREAKEVEN_AT_HALFWAY_TO_VWAP = False  # disabled: exits at small losses before TP can fire
+TRAILING_ATR_ABOVE_VWAP = False    # disabled: ATR data not available, never fires
 TRAILING_ATR_MULTIPLE = _float("TRAILING_ATR_MULTIPLE", "1.5")
 
 # -----------------------------------------------------------------------------
@@ -205,4 +189,3 @@ EOD_PRUNE_STOP_LOSS_PCT = _float("EOD_PRUNE_STOP_LOSS_PCT", "-2.0")  # -2% (deci
 # -----------------------------------------------------------------------------
 OPTIMIZER_RUN_AT_ET = os.environ.get("OPTIMIZER_RUN_AT_ET", "16:05").strip()
 EXPERIENCE_BUFFER_ENABLED = True
-SHADOW_STRATEGY_ENABLED = True

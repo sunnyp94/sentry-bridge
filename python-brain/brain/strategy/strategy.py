@@ -129,13 +129,15 @@ def decide(
         stop_loss_pct = atr_stop_pct / 100.0
     else:
         stop_loss_pct = config.STOP_LOSS_PCT / 100.0
-    # TP = 3× risk when TAKE_PROFIT_R_MULTIPLE set (e.g. stop 2 ATR → TP 6 ATR)
+    # TP = R-multiple × risk. ATR path: use actual ATR stop. Fixed-stop path: use STOP_LOSS_PCT × R_MULTIPLE.
+    # Falls back to TAKE_PROFIT_PCT only when R-multiple is not set.
     r_mult = getattr(config, "TAKE_PROFIT_R_MULTIPLE", 0)
     if r_mult > 0 and use_atr and atr_stop_pct is not None and atr_stop_pct > 0:
         take_profit_pct = (atr_stop_pct / 100.0) * r_mult
+    elif r_mult > 0:
+        take_profit_pct = stop_loss_pct * r_mult
     else:
         take_profit_pct = config.TAKE_PROFIT_PCT / 100.0 if config.TAKE_PROFIT_PCT > 0 else None
-    vol_max = getattr(config, "VOL_MAX_FOR_ENTRY", 0)
     breakeven_act = getattr(config, "BREAKEVEN_ACTIVATION_PCT", 0) / 100.0 if getattr(config, "BREAKEVEN_ACTIVATION_PCT", 0) > 0 else None
     trail_act = getattr(config, "TRAILING_STOP_ACTIVATION_PCT", 0) / 100.0 if getattr(config, "TRAILING_STOP_ACTIVATION_PCT", 0) > 0 else None
     trail_pct = getattr(config, "TRAILING_STOP_PCT", 0) / 100.0 if getattr(config, "TRAILING_STOP_PCT", 0) > 0 else None
