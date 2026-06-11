@@ -72,12 +72,15 @@ def probability_gain(payload: dict) -> float:
     vol = payload.get("annualized_vol_30d")
     if ret1 is None and ret5 is None and vol is None:
         return 0.5
+    has_return_data = ret1 is not None or ret5 is not None
     r = 0.0
     if ret1 is not None:
         r += 0.6 * (max(-1, min(1, ret1)) + 1) / 2
     if ret5 is not None:
         r += 0.4 * (max(-1, min(1, ret5)) + 1) / 2
-    if r == 0:
+    # Only default to neutral when no return data is present (e.g. vol-only payload).
+    # Extreme negative returns should stay near 0 — do not bump to 0.5.
+    if r == 0 and not has_return_data:
         r = 0.5
     if vol is not None and vol > 0.5:
         r *= 0.7
@@ -163,8 +166,9 @@ def decide(
     take_profit_at_vwap = getattr(config, "TAKE_PROFIT_AT_VWAP", False)
     scale_out_50 = getattr(config, "SCALE_OUT_50_AT_VWAP", False)
     if take_profit_at_vwap and scale_out_50 and have_position and not scaled_50_at_vwap and vwap_distance_pct is not None and vwap_distance_pct >= 0:
-        half_qty = max(1, abs(position_qty) // 2)
-        return Decision("sell", symbol, min(half_qty, max_qty), "scale_out_50_at_vwap")
+        if abs(position_qty) >= 2:  # Only scale when there's at least 2 shares; qty=1 would be a full exit
+            half_qty = abs(position_qty) // 2
+            return Decision("sell", symbol, min(half_qty, max_qty), "scale_out_50_at_vwap")
     # Full take profit at VWAP (when not scaling 50% or already scaled)
     if take_profit_at_vwap and have_position and vwap_distance_pct is not None and vwap_distance_pct >= 0:
         return Decision("sell", symbol, exit_qty, "take_profit_at_vwap")
@@ -222,8 +226,9 @@ def decide(
 
     # Short: scale out 50% at VWAP (cover half when price at/below VWAP = profit)
     if take_profit_at_vwap and scale_out_50 and have_short_position and not scaled_50_at_vwap and vwap_distance_pct is not None and vwap_distance_pct <= 0:
-        half_qty = max(1, abs(position_qty) // 2)
-        return Decision("buy", symbol, min(half_qty, max_qty), "scale_out_50_at_vwap")
+        if abs(position_qty) >= 2:  # Only scale when there's at least 2 shares; qty=1 would be a full exit
+            half_qty = abs(position_qty) // 2
+            return Decision("buy", symbol, min(half_qty, max_qty), "scale_out_50_at_vwap")
     if take_profit_at_vwap and have_short_position and vwap_distance_pct is not None and vwap_distance_pct <= 0:
         return Decision("buy", symbol, exit_qty, "take_profit_at_vwap")
     if take_profit_pct and have_short_position and unrealized_pl_pct is not None and unrealized_pl_pct >= take_profit_pct:

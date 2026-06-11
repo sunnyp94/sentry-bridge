@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -37,7 +38,7 @@ func StartPipe(cmdLine string) (*Pipe, error) {
 		return nil, nil
 	}
 	cmd := exec.Command(parts[0], parts[1:]...)
-	cmd.Stderr = nil
+	cmd.Stderr = os.Stderr
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -93,7 +94,7 @@ func (p *Pipe) supervisor() {
 			return
 		}
 		newCmd := exec.Command(parts[0], parts[1:]...)
-		newCmd.Stderr = nil
+		newCmd.Stderr = os.Stderr
 		newStdin, err := newCmd.StdinPipe()
 		if err != nil {
 			slog.Error("brain restart stdin pipe failed", "err", err)

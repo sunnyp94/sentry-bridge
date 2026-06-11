@@ -26,7 +26,10 @@ _PERF = time.perf_counter
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
-    ZoneInfo = None
+    try:
+        from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+    except ImportError:
+        ZoneInfo = None
 
 from brain.strategy import (
     update_and_get_sentiment_ema,
@@ -435,14 +438,12 @@ def run_stop_loss_check() -> None:
             continue
         pos_qty = positions_qty.get(sym, 0)
         try:
-            pos_qty = int(pos_qty)
+            pos_qty = int(float(pos_qty))
         except (TypeError, ValueError):
             pos_qty = 0
         if pos_qty == 0:
             continue
         combined = dict(last_payload_by_symbol.get(sym, {}))
-        combined.setdefault("return_1m", 0)
-        combined.setdefault("return_5m", 0)
         combined.setdefault("annualized_vol_30d", 0)
         prob = probability_gain(combined)
         sent_ema = get_sentiment_ema(sym)
@@ -491,7 +492,7 @@ def run_portfolio_health_check() -> None:
         pl_pct = position_unrealized_pl_pct.get(sym)
         if pl_pct is None or pl_pct >= 0:
             continue
-        size = max(1, min(abs(qty), brain_config.STRATEGY_MAX_QTY))
+        size = abs(qty)  # Close full position — health check must fully exit, not partially
         if qty > 0:
             d = Decision("sell", sym, size, "portfolio_health_check_loser")
         else:
@@ -535,12 +536,12 @@ def run_flat_when_daily_target() -> None:
         return
     for sym, qty in list(positions_qty.items()):
         try:
-            q = int(qty)
+            q = int(float(qty))
         except (TypeError, ValueError):
             continue
         if q == 0:
             continue
-        size = max(1, min(abs(q), brain_config.STRATEGY_MAX_QTY))
+        size = abs(q)  # Close full position — daily target flat must fully exit, not partially
         if q > 0:
             d = Decision("sell", sym, size, "daily_target_hit")
         else:
@@ -687,7 +688,16 @@ def handle_event(ev: dict) -> None:
     typ = ev.get("type", "?")
     payload = ev.get("payload") or {}
     # Single gate: trading logic only on full trading days (market_calendar: weekends, holidays, half-days excluded).
-    today_et = datetime.now(ZoneInfo("America/New_York")).date() if ZoneInfo else None
+    try:
+        if ZoneInfo:
+            today_et = datetime.now(ZoneInfo("America/New_York")).date()
+        else:
+            # Fall back to UTC with fixed ET offset (-4h summer / -5h winter); good enough for date gating.
+            utc_now = datetime.now(timezone.utc)
+            et_offset = -4 if utc_now.month in range(3, 11) else -5
+            today_et = (utc_now + timedelta(hours=et_offset)).date()
+    except Exception:
+        today_et = datetime.now(timezone.utc).date()
     _is_full_trading_day = today_et is not None and is_full_trading_day(today_et)
 
     if typ == "trade":
@@ -748,7 +758,7 @@ def handle_event(ev: dict) -> None:
                 continue
             qty = p.get("qty", 0)
             try:
-                qty = int(qty)
+                qty = int(float(qty))
             except (TypeError, ValueError):
                 qty = 0
             side = (p.get("side") or "long").lower()

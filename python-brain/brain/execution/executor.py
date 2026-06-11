@@ -27,12 +27,14 @@ except ImportError:
 
 
 def _client():
-    """Build Alpaca TradingClient (paper when TRADE_PAPER or APCA_PAPER is true)."""
+    """Build Alpaca TradingClient. Uses paper unless both TRADE_PAPER=false and LIVE_TRADING_ENABLED=true."""
     key = os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY_ID")
     secret = os.environ.get("APCA_API_SECRET_KEY") or os.environ.get("ALPACA_API_SECRET_KEY")
     if not key or not secret:
         return None
-    paper = os.environ.get("APCA_PAPER", "true").lower() in ("true", "1", "yes") or os.environ.get("TRADE_PAPER", "").lower() in ("true", "1", "yes")
+    live_enabled = os.environ.get("LIVE_TRADING_ENABLED", "").lower() in ("true", "1", "yes")
+    trade_paper = os.environ.get("TRADE_PAPER", "true").lower() not in ("false", "0", "no")
+    paper = trade_paper or not live_enabled
     return TradingClient(key, secret, paper=paper)
 
 
@@ -58,7 +60,7 @@ def get_account_equity() -> Optional[float]:
                 if attempt < 2:
                     time.sleep(1.0)
                 continue
-            for attr in ("equity", "portfolio_value", "last_equity"):
+            for attr in ("equity", "portfolio_value"):
                 val = getattr(acc, attr, None)
                 if val is not None:
                     try:
@@ -336,7 +338,7 @@ def close_all_positions(positions: List[Dict[str, Any]], reason: str = "close_al
             continue
         qty = p.get("qty", 0)
         try:
-            qty = int(qty)
+            qty = int(float(qty))
         except (TypeError, ValueError):
             continue
         side = (p.get("side") or "long").lower()

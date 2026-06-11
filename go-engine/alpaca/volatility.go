@@ -10,14 +10,15 @@ func AnnualizedVolatility(bars []Bar) float64 {
 		return math.NaN()
 	}
 	var sum, sumSq float64
-	n := float64(len(bars) - 1)
+	var n float64
 	for i := 1; i < len(bars); i++ {
-		if bars[i-1].Close <= 0 {
+		if bars[i-1].Close <= 0 || bars[i].Close <= 0 {
 			continue
 		}
 		logRet := math.Log(bars[i].Close / bars[i-1].Close)
 		sum += logRet
 		sumSq += logRet * logRet
+		n++
 	}
 	if n < 2 {
 		return math.NaN()
